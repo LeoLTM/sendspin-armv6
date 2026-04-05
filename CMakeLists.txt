@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.28)
 project(sendspin-armv6 VERSION 0.1.0 LANGUAGES CXX)
 
 include(FetchContent)
@@ -8,6 +8,7 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/Sendspin/sendspin-cpp.git
     GIT_TAG        v0.1.0
     GIT_SHALLOW    TRUE
+    EXCLUDE_FROM_ALL  # do not build sendspin-cpp's own examples
 )
 FetchContent_MakeAvailable(sendspin-cpp)
 
