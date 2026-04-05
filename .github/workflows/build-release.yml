@@ -18,13 +18,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build
 
+      # 1. Check for a cached toolchain
+      - name: Cache Pi Zero W Toolchain
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: rpi-toolchain
+          # If you ever update the GCC version, change this key to invalidate the old cache
+          key: ${{ runner.os }}-gcc-14.2.0-pi_0-1 
+
+      # 2. Only download and extract if the cache missed
       - name: Download Pi Zero W cross-compiler (abhiTronix / Bookworm GCC 14.2.0)
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           curl -fL \
             "https://sourceforge.net/projects/raspberry-pi-cross-compilers/files/Raspberry%20Pi%20GCC%20Cross-Compiler%20Toolchains/Bookworm/GCC%2014.2.0/Raspberry%20Pi%201%2C%20Zero/cross-gcc-14.2.0-pi_0-1.tar.gz/download" \
             -o toolchain.tar.gz
-          tar xf toolchain.tar.gz
-          echo "$PWD/$(ls -d cross-pi-gcc-*/bin)" >> "$GITHUB_PATH"
+          
+          # Extract into a predictable, specific directory and strip the top-level folder
+          mkdir -p rpi-toolchain
+          tar xf toolchain.tar.gz -C rpi-toolchain --strip-components=1
+          rm toolchain.tar.gz
+
+      # 3. Always add to PATH (whether freshly downloaded or restored from cache)
+      - name: Add Toolchain to PATH
+        run: echo "$PWD/rpi-toolchain/bin" >> "$GITHUB_PATH"
 
       - name: Configure CMake (Release)
         run: |
