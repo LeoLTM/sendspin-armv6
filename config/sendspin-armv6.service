@@ -9,12 +9,19 @@ StartLimitIntervalSec=120
 StartLimitBurst=5
 
 [Service]
+# Lock CPU to maximum frequency — dynamic scaling destroys the high-res
+# timers needed for microsecond-level audio synchronisation.
+ExecStartPre=-/bin/sh -c 'echo performance > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'
+ExecStopPost=-/bin/sh -c 'echo ondemand > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'
 ExecStart=/usr/local/bin/sendspin-armv6
 Restart=on-failure
 RestartSec=10
 User=root
 SupplementaryGroups=audio
 Nice=-10
+# Allow the audio playback thread to use SCHED_FIFO real-time priority.
+LimitRTPRIO=10
+LimitMEMLOCK=infinity
 
 [Install]
 WantedBy=multi-user.target

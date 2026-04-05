@@ -23,6 +23,6 @@ add_executable(sendspin-armv6
     src/config.cpp
 )
 
-target_link_libraries(sendspin-armv6 PRIVATE sendspin)
+target_link_libraries(sendspin-armv6 PRIVATE sendspin asound pthread)
 target_compile_features(sendspin-armv6 PRIVATE cxx_std_20)
 target_include_directories(sendspin-armv6 PRIVATE src)

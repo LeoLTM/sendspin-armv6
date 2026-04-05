@@ -120,9 +120,10 @@ int main(int argc, char* argv[]) {
     // Larger ring buffer absorbs CPU scheduling jitter on the single-core ARMv6
     // without dropping encoded chunks before the sync task can decode them.
     player_config.audio_buffer_capacity = 2000000;
-    // Declare the aplay pipeline latency so the sync task schedules audio
-    // early enough for it to emerge from the ALSA buffer on time.
-    player_config.fixed_delay_us = AlsaPipeSink::ALSA_BUFFER_TIME_US;
+    // With direct ALSA and snd_pcm_delay()-based timestamps, the reported
+    // playback time already accounts for the hardware buffer.  No additional
+    // fixed delay compensation is required.
+    player_config.fixed_delay_us = AlsaPipeSink::PIPELINE_DELAY_US;
     auto& player = client.add_player(std::move(player_config));
 
     // Audio output via aplay pipe

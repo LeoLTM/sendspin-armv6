@@ -1,16 +1,24 @@
 #include "alsa_pipe_sink.h"
 
+#include <alsa/asoundlib.h>
+#include <pthread.h>
+#include <sched.h>
+
+#include <algorithm>
 #include <cctype>
 #include <chrono>
-#include <cstdio>
 #include <cstring>
+
+// pcm_ is stored as void* so the header does not depend on <alsa/asoundlib.h>.
+#define PCM static_cast<snd_pcm_t*>(pcm_)
+
+// ---------------------------------------------------------------------------
+// Device name validation
+// ---------------------------------------------------------------------------
 
 AlsaPipeSink::~AlsaPipeSink() { stop(); }
 
 void AlsaPipeSink::set_device(const std::string& device) {
-    // Validate: allow only characters that are safe in a shell argument.
-    // ALSA device names contain alphanumerics, colon, comma, underscore,
-    // hyphen, period and equals (e.g. "plughw:1,0", "sysdefault:CARD=Device").
     for (unsigned char c : device) {
         if (!std::isalnum(c) && c != ':' && c != ',' && c != '_' &&
             c != '-' && c != '.' && c != '=') {
@@ -24,6 +32,113 @@ void AlsaPipeSink::set_device(const std::string& device) {
     device_ = device;
 }
 
+// ---------------------------------------------------------------------------
+// ALSA lifecycle
+// ---------------------------------------------------------------------------
+
+bool AlsaPipeSink::open_alsa() {
+    const char* dev = device_.empty() ? "default" : device_.c_str();
+
+    snd_pcm_t* handle = nullptr;
+    int err = snd_pcm_open(&handle, dev, SND_PCM_STREAM_PLAYBACK, 0);
+    if (err < 0) {
+        fprintf(stderr, "AlsaPipeSink: cannot open '%s': %s\n",
+                dev, snd_strerror(err));
+        return false;
+    }
+    pcm_ = handle;
+
+    // ---- Hardware parameters ----
+    snd_pcm_hw_params_t* hw;
+    snd_pcm_hw_params_alloca(&hw);
+    snd_pcm_hw_params_any(PCM, hw);
+
+    snd_pcm_hw_params_set_access(PCM, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
+
+    snd_pcm_format_t fmt;
+    switch (bits_per_sample_) {
+        case 16: fmt = SND_PCM_FORMAT_S16_LE; break;
+        case 24: fmt = SND_PCM_FORMAT_S24_3LE; break;
+        case 32: fmt = SND_PCM_FORMAT_S32_LE; break;
+        default:
+            fprintf(stderr, "AlsaPipeSink: unsupported bit depth %u\n",
+                    bits_per_sample_);
+            close_alsa();
+            return false;
+    }
+    snd_pcm_hw_params_set_format(PCM, hw, fmt);
+    snd_pcm_hw_params_set_channels(PCM, hw, channels_);
+    snd_pcm_hw_params_set_rate(PCM, hw, sample_rate_, 0);
+
+    // Request tight buffer / period sizes for granular sync feedback.
+    // 100 ms buffer absorbs scheduling jitter on the single-core Pi Zero;
+    // 20 ms periods give the sync algorithm timely updates without
+    // overwhelming the CPU with interrupts.
+    unsigned int buf_time = 100000;  // 100 ms
+    unsigned int per_time =  20000;  //  20 ms
+    int dir = 0;
+    snd_pcm_hw_params_set_buffer_time_near(PCM, hw, &buf_time, &dir);
+    dir = 0;
+    snd_pcm_hw_params_set_period_time_near(PCM, hw, &per_time, &dir);
+
+    err = snd_pcm_hw_params(PCM, hw);
+    if (err < 0) {
+        fprintf(stderr, "AlsaPipeSink: hw_params failed: %s\n",
+                snd_strerror(err));
+        close_alsa();
+        return false;
+    }
+
+    // Read back negotiated values.
+    snd_pcm_uframes_t pf = 0, bf = 0;
+    snd_pcm_hw_params_get_period_size(hw, &pf, &dir);
+    snd_pcm_hw_params_get_buffer_size(hw, &bf);
+    period_frames_ = static_cast<unsigned long>(pf);
+    buffer_frames_ = static_cast<unsigned long>(bf);
+
+    // ---- Software parameters ----
+    snd_pcm_sw_params_t* sw;
+    snd_pcm_sw_params_alloca(&sw);
+    snd_pcm_sw_params_current(PCM, sw);
+    // Start hardware output after two periods are queued.
+    snd_pcm_sw_params_set_start_threshold(PCM, sw, pf * 2);
+    snd_pcm_sw_params_set_avail_min(PCM, sw, pf);
+    snd_pcm_sw_params(PCM, sw);
+
+    fprintf(stderr,
+            "AlsaPipeSink: %s — %u Hz %u ch %u bit, "
+            "period %lu frames, buffer %lu frames\n",
+            dev, sample_rate_, channels_, bits_per_sample_,
+            period_frames_, buffer_frames_);
+    return true;
+}
+
+void AlsaPipeSink::close_alsa() {
+    if (pcm_) {
+        snd_pcm_close(PCM);
+        pcm_ = nullptr;
+    }
+}
+
+bool AlsaPipeSink::recover_xrun(int err) {
+    if (err == -EPIPE) {
+        fprintf(stderr, "AlsaPipeSink: underrun, recovering\n");
+        return snd_pcm_prepare(PCM) >= 0;
+    }
+    if (err == -ESTRPIPE) {
+        int rc;
+        while ((rc = snd_pcm_resume(PCM)) == -EAGAIN)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (rc < 0) rc = snd_pcm_prepare(PCM);
+        return rc >= 0;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Stream lifecycle
+// ---------------------------------------------------------------------------
+
 bool AlsaPipeSink::configure(uint32_t sample_rate, uint8_t channels,
                              uint8_t bits_per_sample) {
     stop();
@@ -32,111 +147,45 @@ bool AlsaPipeSink::configure(uint32_t sample_rate, uint8_t channels,
     channels_ = channels;
     bits_per_sample_ = bits_per_sample;
     bytes_per_frame_ = channels * (bits_per_sample / 8);
-    buffered_bytes_ = 0;
 
-    const char* format;
-    switch (bits_per_sample) {
-        case 16: format = "S16_LE"; break;
-        case 24: format = "S24_3LE"; break;
-        case 32: format = "S32_LE"; break;
-        default:
-            fprintf(stderr, "AlsaPipeSink: unsupported bit depth %u\n",
-                    bits_per_sample);
-            return false;
-    }
+    ring_.resize(RING_CAPACITY);
+    ring_head_ = ring_tail_ = ring_used_ = 0;
+    flush_requested_.store(false);
 
-    // Build aplay command. -q suppresses verbose output, -t raw for raw PCM.
-    //
-    // --buffer-time pins the ALSA hardware buffer to ALSA_BUFFER_TIME_US so
-    // its depth is predictable and matches the fixed_delay_us declared in the
-    // PlayerRole config.  Without this the kernel default (~500 ms) varies by
-    // driver and causes the sync task to under-predict actual playback time.
-    //
-    // --period-time=20000 (20 ms) is a comfortable interrupt interval for the
-    // Pi Zero's single-core scheduler: short enough for timely refill, long
-    // enough to avoid excessive CPU wake-ups.
-    char cmd[256];
-    if (!device_.empty()) {
-        snprintf(cmd, sizeof(cmd),
-                 "aplay -D %s -f %s -r %u -c %u -t raw -q"
-                 " --buffer-time=%d --period-time=20000",
-                 device_.c_str(), format, sample_rate, channels,
-                 ALSA_BUFFER_TIME_US);
-    } else {
-        snprintf(cmd, sizeof(cmd),
-                 "aplay -f %s -r %u -c %u -t raw -q"
-                 " --buffer-time=%d --period-time=20000",
-                 format, sample_rate, channels, ALSA_BUFFER_TIME_US);
-    }
+    if (!open_alsa()) return false;
 
-    pipe_ = popen(cmd, "w");
-    if (!pipe_) {
-        fprintf(stderr, "AlsaPipeSink: failed to open aplay pipe\n");
-        return false;
-    }
-
-    fprintf(stderr, "AlsaPipeSink: playing %uHz %uch %ubit via aplay\n",
-            sample_rate, channels, bits_per_sample);
+    running_.store(true);
+    playback_thread_ = std::thread([this] { playback_loop(); });
     return true;
 }
 
-size_t AlsaPipeSink::write(uint8_t* data, size_t length,
-                           uint32_t /*timeout_ms*/) {
-    if (!pipe_) return length;  // discard if no pipe
-
-    apply_volume(data, length);
-
-    size_t written = fwrite(data, 1, length, pipe_);
-
-    // Report timing feedback for synchronization.
-    //
-    // The sync task uses the timestamp passed to notify_audio_played() as
-    // "the time the last reported frame finished coming out of the DAC".
-    // aplay buffers audio in the kernel before it reaches the hardware, so
-    // we must report a future timestamp: now + the time the bytes currently
-    // sitting in aplay's buffer still need to play.
-    if (written > 0 && bytes_per_frame_ > 0 && sample_rate_ > 0 && on_frames_played) {
-        buffered_bytes_ += written;
-        uint32_t frames = static_cast<uint32_t>(written / bytes_per_frame_);
-
-        // finish_timestamp is the wall-clock time when the last frame now in
-        // aplay's buffer will finish playing.  The sync task interprets it as
-        // "these frames finished at finish_timestamp" and tracks additionally
-        // buffered frames via its own buffered_frames counter.  We therefore
-        // report the full aplay buffer depth (including this write) so that
-        //
-        //   new_playtime = finish_timestamp + sync_task_unplayed_us
-        //
-        // converges to the correct value once the sync task drains its own
-        // outstanding frame count down to match ours.
-        int64_t buffered_frames_total = static_cast<int64_t>(buffered_bytes_ / bytes_per_frame_);
-        int64_t buffered_us = (buffered_frames_total * INT64_C(1000000)) / static_cast<int64_t>(sample_rate_);
-
-        int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                             std::chrono::steady_clock::now().time_since_epoch())
-                             .count();
-        int64_t finish_timestamp = now_us + buffered_us;
-
-        // Advance our own estimate: deduct the frames we just reported so
-        // that the next write's buffered_us reflects only what remains.
-        size_t reported_bytes = static_cast<size_t>(frames) * bytes_per_frame_;
-        buffered_bytes_ = (reported_bytes <= buffered_bytes_) ? (buffered_bytes_ - reported_bytes) : 0;
-
-        on_frames_played(frames, finish_timestamp);
-    }
-
-    return written;
-}
-
 void AlsaPipeSink::stop() {
-    if (pipe_) {
-        pclose(pipe_);
-        pipe_ = nullptr;
+    if (running_.exchange(false)) {
+        // snd_pcm_drop() unblocks any pending snd_pcm_writei() in the
+        // playback thread so it observes running_ == false and exits.
+        if (pcm_) snd_pcm_drop(PCM);
+        ring_cv_.notify_all();
+        if (playback_thread_.joinable()) playback_thread_.join();
     }
-    buffered_bytes_ = 0;
+    close_alsa();
+    {
+        std::lock_guard<std::mutex> lk(ring_mtx_);
+        ring_head_ = ring_tail_ = ring_used_ = 0;
+    }
 }
 
-void AlsaPipeSink::clear() { stop(); }
+void AlsaPipeSink::clear() {
+    {
+        std::lock_guard<std::mutex> lk(ring_mtx_);
+        ring_head_ = ring_tail_ = ring_used_ = 0;
+    }
+    flush_requested_.store(true);
+    ring_cv_.notify_all();
+}
+
+// ---------------------------------------------------------------------------
+// Volume
+// ---------------------------------------------------------------------------
 
 void AlsaPipeSink::set_volume(uint8_t volume) {
     volume_ = volume > 100 ? 100 : volume;
@@ -200,3 +249,137 @@ void AlsaPipeSink::apply_volume(uint8_t* data, size_t length) {
             break;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Ring buffer producer (called from sendspin's network/decode thread)
+// ---------------------------------------------------------------------------
+
+size_t AlsaPipeSink::write(uint8_t* data, size_t length,
+                           uint32_t timeout_ms) {
+    if (!running_.load()) return length;  // discard if not running
+
+    apply_volume(data, length);
+
+    auto deadline = std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(timeout_ms);
+    size_t written = 0;
+
+    std::unique_lock<std::mutex> lk(ring_mtx_);
+    while (written < length && running_.load()) {
+        size_t space = RING_CAPACITY - ring_used_;
+        if (space == 0) {
+            if (std::chrono::steady_clock::now() >= deadline) break;
+            ring_cv_.wait_until(lk, deadline, [&] {
+                return (RING_CAPACITY - ring_used_) > 0 || !running_.load();
+            });
+            continue;
+        }
+
+        size_t chunk = std::min(length - written, space);
+        // Copy into the ring, handling wrap-around.
+        size_t head_room = RING_CAPACITY - ring_head_;
+        size_t first = std::min(chunk, head_room);
+        std::memcpy(ring_.data() + ring_head_, data + written, first);
+        if (chunk > first)
+            std::memcpy(ring_.data(), data + written + first, chunk - first);
+        ring_head_ = (ring_head_ + chunk) % RING_CAPACITY;
+        ring_used_ += chunk;
+        written += chunk;
+    }
+    lk.unlock();
+    ring_cv_.notify_one();  // wake playback thread
+
+    return written;
+}
+
+// ---------------------------------------------------------------------------
+// Ring buffer consumer / ALSA writer (dedicated playback thread)
+// ---------------------------------------------------------------------------
+
+void AlsaPipeSink::playback_loop() {
+    // Elevate this thread to SCHED_FIFO so ALSA writes are not delayed by
+    // network I/O sharing the single core.  Silently ignored if we lack
+    // CAP_SYS_NICE.
+    {
+        struct sched_param sp = {};
+        sp.sched_priority = 1;  // lowest RT priority
+        pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+    }
+
+    const size_t period_bytes =
+        static_cast<size_t>(period_frames_) * bytes_per_frame_;
+    std::vector<uint8_t> buf(period_bytes);
+
+    while (running_.load()) {
+        // ---- Handle flush request (from clear()) ----
+        if (flush_requested_.exchange(false)) {
+            snd_pcm_drop(PCM);
+            snd_pcm_prepare(PCM);
+            continue;
+        }
+
+        // ---- Read from ring buffer ----
+        size_t to_read = 0;
+        {
+            std::unique_lock<std::mutex> lk(ring_mtx_);
+            if (ring_used_ < bytes_per_frame_) {
+                ring_cv_.wait_for(lk, std::chrono::milliseconds(5), [&] {
+                    return ring_used_ >= bytes_per_frame_ || !running_.load()
+                           || flush_requested_.load();
+                });
+                if (!running_.load() || flush_requested_.load()) continue;
+                if (ring_used_ < bytes_per_frame_) continue;
+            }
+
+            to_read = std::min(ring_used_, period_bytes);
+            to_read = (to_read / bytes_per_frame_) * bytes_per_frame_;
+
+            size_t tail_room = RING_CAPACITY - ring_tail_;
+            size_t first = std::min(to_read, tail_room);
+            std::memcpy(buf.data(), ring_.data() + ring_tail_, first);
+            if (to_read > first)
+                std::memcpy(buf.data() + first, ring_.data(),
+                            to_read - first);
+            ring_tail_ = (ring_tail_ + to_read) % RING_CAPACITY;
+            ring_used_ -= to_read;
+        }
+        ring_cv_.notify_one();  // wake producer if it was blocked
+
+        // ---- Write to ALSA (blocking — provides natural pacing) ----
+        snd_pcm_uframes_t frames =
+            static_cast<snd_pcm_uframes_t>(to_read / bytes_per_frame_);
+        snd_pcm_uframes_t offset = 0;
+
+        while (offset < frames && running_.load()) {
+            snd_pcm_sframes_t n = snd_pcm_writei(
+                PCM, buf.data() + offset * bytes_per_frame_, frames - offset);
+            if (n < 0) {
+                if (!running_.load()) break;
+                if (recover_xrun(static_cast<int>(n))) continue;
+                fprintf(stderr, "AlsaPipeSink: write error: %s\n",
+                        snd_strerror(static_cast<int>(n)));
+                running_.store(false);
+                break;
+            }
+            offset += static_cast<snd_pcm_uframes_t>(n);
+        }
+
+        // ---- Timing feedback via snd_pcm_delay() ----
+        if (offset > 0 && on_frames_played) {
+            snd_pcm_sframes_t delay = 0;
+            if (snd_pcm_delay(PCM, &delay) < 0 || delay < 0)
+                delay = static_cast<snd_pcm_sframes_t>(buffer_frames_);
+
+            int64_t delay_us = (static_cast<int64_t>(delay) * INT64_C(1000000))
+                               / static_cast<int64_t>(sample_rate_);
+            int64_t now_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
+
+            on_frames_played(static_cast<uint32_t>(offset), now_us + delay_us);
+        }
+    }
+}
+
+#undef PCM
