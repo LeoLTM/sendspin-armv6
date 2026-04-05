@@ -1,0 +1,137 @@
+#include "alsa_pipe_sink.h"
+
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+
+AlsaPipeSink::~AlsaPipeSink() { stop(); }
+
+bool AlsaPipeSink::configure(uint32_t sample_rate, uint8_t channels,
+                             uint8_t bits_per_sample) {
+    stop();
+
+    sample_rate_ = sample_rate;
+    channels_ = channels;
+    bits_per_sample_ = bits_per_sample;
+    bytes_per_frame_ = channels * (bits_per_sample / 8);
+
+    const char* format;
+    switch (bits_per_sample) {
+        case 16: format = "S16_LE"; break;
+        case 24: format = "S24_3LE"; break;
+        case 32: format = "S32_LE"; break;
+        default:
+            fprintf(stderr, "AlsaPipeSink: unsupported bit depth %u\n",
+                    bits_per_sample);
+            return false;
+    }
+
+    // Build aplay command. -q suppresses verbose output, -t raw for raw PCM.
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "aplay -f %s -r %u -c %u -t raw -q",
+             format, sample_rate, channels);
+
+    pipe_ = popen(cmd, "w");
+    if (!pipe_) {
+        fprintf(stderr, "AlsaPipeSink: failed to open aplay pipe\n");
+        return false;
+    }
+
+    fprintf(stderr, "AlsaPipeSink: playing %uHz %uch %ubit via aplay\n",
+            sample_rate, channels, bits_per_sample);
+    return true;
+}
+
+size_t AlsaPipeSink::write(uint8_t* data, size_t length,
+                           uint32_t /*timeout_ms*/) {
+    if (!pipe_) return length;  // discard if no pipe
+
+    apply_volume(data, length);
+
+    size_t written = fwrite(data, 1, length, pipe_);
+
+    // Report timing feedback for synchronization.
+    // aplay adds its own buffering, but for a headless player this is
+    // good enough. We report "now" as the approximate playback time.
+    if (written > 0 && bytes_per_frame_ > 0 && on_frames_played) {
+        uint32_t frames = static_cast<uint32_t>(written / bytes_per_frame_);
+        int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now().time_since_epoch())
+                             .count();
+        on_frames_played(frames, now_us);
+    }
+
+    return written;
+}
+
+void AlsaPipeSink::stop() {
+    if (pipe_) {
+        pclose(pipe_);
+        pipe_ = nullptr;
+    }
+}
+
+void AlsaPipeSink::clear() { stop(); }
+
+void AlsaPipeSink::set_volume(uint8_t volume) {
+    volume_ = volume > 100 ? 100 : volume;
+}
+
+void AlsaPipeSink::set_muted(bool muted) { muted_ = muted; }
+
+void AlsaPipeSink::apply_volume(uint8_t* data, size_t length) {
+    if (!muted_ && volume_ >= 100) return;
+
+    if (muted_ || volume_ == 0) {
+        std::memset(data, 0, length);
+        return;
+    }
+
+    // Quadratic curve for perceptually uniform volume control.
+    // scale = (vol/100)^2 in Q32 fixed-point.
+    static constexpr uint64_t Q32_ONE = UINT64_C(1) << 32;
+    static constexpr int FRAC_BITS = 32;
+    static constexpr int64_t ROUND = INT64_C(1) << (FRAC_BITS - 1);
+
+    uint64_t v = volume_;
+    int64_t scale = static_cast<int64_t>((v * v * Q32_ONE) / 10000);
+
+    uint8_t bps = bits_per_sample_ / 8;
+    switch (bps) {
+        case 2: {
+            size_t count = length / 2;
+            auto* samples = reinterpret_cast<int16_t*>(data);
+            for (size_t i = 0; i < count; ++i) {
+                samples[i] = static_cast<int16_t>(
+                    (static_cast<int64_t>(samples[i]) * scale + ROUND) >> FRAC_BITS);
+            }
+            break;
+        }
+        case 3: {
+            size_t count = length / 3;
+            for (size_t i = 0; i < count; ++i) {
+                uint8_t* p = data + i * 3;
+                int32_t sample = static_cast<int32_t>(
+                    p[0] | (p[1] << 8) | (p[2] << 16));
+                if (sample & 0x800000) sample |= static_cast<int32_t>(0xFF000000);
+                int32_t out = static_cast<int32_t>(
+                    (static_cast<int64_t>(sample) * scale + ROUND) >> FRAC_BITS);
+                p[0] = static_cast<uint8_t>(out & 0xFF);
+                p[1] = static_cast<uint8_t>((out >> 8) & 0xFF);
+                p[2] = static_cast<uint8_t>((out >> 16) & 0xFF);
+            }
+            break;
+        }
+        case 4: {
+            size_t count = length / 4;
+            auto* samples = reinterpret_cast<int32_t*>(data);
+            for (size_t i = 0; i < count; ++i) {
+                samples[i] = static_cast<int32_t>(
+                    (static_cast<int64_t>(samples[i]) * scale + ROUND) >> FRAC_BITS);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}

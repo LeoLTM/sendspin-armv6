@@ -1,0 +1,15 @@
+[Unit]
+Description=Sendspin ARMv6 Audio Player
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/sendspin-armv6
+Restart=on-failure
+RestartSec=5
+User=pi
+SupplementaryGroups=audio
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target
