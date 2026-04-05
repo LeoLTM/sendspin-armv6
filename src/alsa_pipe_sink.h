@@ -49,6 +49,10 @@ class AlsaPipeSink {
     uint8_t bits_per_sample_{0};
     size_t bytes_per_frame_{0};
 
+    // Running total of bytes written to the aplay pipe but not yet played.
+    // Used to compute the output timestamp passed to notify_audio_played().
+    size_t buffered_bytes_{0};
+
     uint8_t volume_{100};
     bool muted_{false};
 

@@ -32,6 +32,7 @@ bool AlsaPipeSink::configure(uint32_t sample_rate, uint8_t channels,
     channels_ = channels;
     bits_per_sample_ = bits_per_sample;
     bytes_per_frame_ = channels * (bits_per_sample / 8);
+    buffered_bytes_ = 0;
 
     const char* format;
     switch (bits_per_sample) {
@@ -74,14 +75,40 @@ size_t AlsaPipeSink::write(uint8_t* data, size_t length,
     size_t written = fwrite(data, 1, length, pipe_);
 
     // Report timing feedback for synchronization.
-    // aplay adds its own buffering, but for a headless player this is
-    // good enough. We report "now" as the approximate playback time.
-    if (written > 0 && bytes_per_frame_ > 0 && on_frames_played) {
+    //
+    // The sync task uses the timestamp passed to notify_audio_played() as
+    // "the time the last reported frame finished coming out of the DAC".
+    // aplay buffers audio in the kernel before it reaches the hardware, so
+    // we must report a future timestamp: now + the time the bytes currently
+    // sitting in aplay's buffer still need to play.
+    if (written > 0 && bytes_per_frame_ > 0 && sample_rate_ > 0 && on_frames_played) {
+        buffered_bytes_ += written;
         uint32_t frames = static_cast<uint32_t>(written / bytes_per_frame_);
+
+        // finish_timestamp is the wall-clock time when the last frame now in
+        // aplay's buffer will finish playing.  The sync task interprets it as
+        // "these frames finished at finish_timestamp" and tracks additionally
+        // buffered frames via its own buffered_frames counter.  We therefore
+        // report the full aplay buffer depth (including this write) so that
+        //
+        //   new_playtime = finish_timestamp + sync_task_unplayed_us
+        //
+        // converges to the correct value once the sync task drains its own
+        // outstanding frame count down to match ours.
+        int64_t buffered_frames_total = static_cast<int64_t>(buffered_bytes_ / bytes_per_frame_);
+        int64_t buffered_us = (buffered_frames_total * INT64_C(1000000)) / static_cast<int64_t>(sample_rate_);
+
         int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
                              std::chrono::steady_clock::now().time_since_epoch())
                              .count();
-        on_frames_played(frames, now_us);
+        int64_t finish_timestamp = now_us + buffered_us;
+
+        // Advance our own estimate: deduct the frames we just reported so
+        // that the next write's buffered_us reflects only what remains.
+        size_t reported_bytes = static_cast<size_t>(frames) * bytes_per_frame_;
+        buffered_bytes_ = (reported_bytes <= buffered_bytes_) ? (buffered_bytes_ - reported_bytes) : 0;
+
+        on_frames_played(frames, finish_timestamp);
     }
 
     return written;
@@ -92,6 +119,7 @@ void AlsaPipeSink::stop() {
         pclose(pipe_);
         pipe_ = nullptr;
     }
+    buffered_bytes_ = 0;
 }
 
 void AlsaPipeSink::clear() { stop(); }
