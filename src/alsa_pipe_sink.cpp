@@ -188,15 +188,17 @@ void AlsaPipeSink::clear() {
 // ---------------------------------------------------------------------------
 
 void AlsaPipeSink::set_volume(uint8_t volume) {
-    volume_ = volume > 100 ? 100 : volume;
+    volume_.store(volume > 100 ? 100 : volume);
 }
 
-void AlsaPipeSink::set_muted(bool muted) { muted_ = muted; }
+void AlsaPipeSink::set_muted(bool muted) { muted_.store(muted); }
 
 void AlsaPipeSink::apply_volume(uint8_t* data, size_t length) {
-    if (!muted_ && volume_ >= 100) return;
+    const uint8_t vol = volume_.load();
+    const bool muted  = muted_.load();
+    if (!muted && vol >= 100) return;
 
-    if (muted_ || volume_ == 0) {
+    if (muted || vol == 0) {
         std::memset(data, 0, length);
         return;
     }
@@ -207,7 +209,7 @@ void AlsaPipeSink::apply_volume(uint8_t* data, size_t length) {
     static constexpr int FRAC_BITS = 32;
     static constexpr int64_t ROUND = INT64_C(1) << (FRAC_BITS - 1);
 
-    uint64_t v = volume_;
+    uint64_t v = vol;
     int64_t scale = static_cast<int64_t>((v * v * Q32_ONE) / 10000);
 
     uint8_t bps = bits_per_sample_ / 8;
@@ -257,8 +259,6 @@ void AlsaPipeSink::apply_volume(uint8_t* data, size_t length) {
 size_t AlsaPipeSink::write(uint8_t* data, size_t length,
                            uint32_t timeout_ms) {
     if (!running_.load()) return length;  // discard if not running
-
-    apply_volume(data, length);
 
     auto deadline = std::chrono::steady_clock::now() +
                     std::chrono::milliseconds(timeout_ms);
@@ -344,6 +344,9 @@ void AlsaPipeSink::playback_loop() {
             ring_used_ -= to_read;
         }
         ring_cv_.notify_one();  // wake producer if it was blocked
+
+        // ---- Apply volume (done here so changes take effect immediately) ----
+        apply_volume(buf.data(), to_read);
 
         // ---- Write to ALSA (blocking — provides natural pacing) ----
         snd_pcm_uframes_t frames =

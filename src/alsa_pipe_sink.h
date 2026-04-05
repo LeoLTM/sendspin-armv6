@@ -86,9 +86,9 @@ class AlsaPipeSink {
 
     void playback_loop();
 
-    // ---- Volume ----
-    uint8_t volume_{100};
-    bool muted_{false};
+    // ---- Volume (written by network thread, read by playback thread) ----
+    std::atomic<uint8_t> volume_{100};
+    std::atomic<bool> muted_{false};
 
     void apply_volume(uint8_t* data, size_t length);
 };
