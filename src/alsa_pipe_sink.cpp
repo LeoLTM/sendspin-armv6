@@ -46,13 +46,27 @@ bool AlsaPipeSink::configure(uint32_t sample_rate, uint8_t channels,
     }
 
     // Build aplay command. -q suppresses verbose output, -t raw for raw PCM.
+    //
+    // --buffer-time pins the ALSA hardware buffer to ALSA_BUFFER_TIME_US so
+    // its depth is predictable and matches the fixed_delay_us declared in the
+    // PlayerRole config.  Without this the kernel default (~500 ms) varies by
+    // driver and causes the sync task to under-predict actual playback time.
+    //
+    // --period-time=20000 (20 ms) is a comfortable interrupt interval for the
+    // Pi Zero's single-core scheduler: short enough for timely refill, long
+    // enough to avoid excessive CPU wake-ups.
     char cmd[256];
     if (!device_.empty()) {
-        snprintf(cmd, sizeof(cmd), "aplay -D %s -f %s -r %u -c %u -t raw -q",
-                 device_.c_str(), format, sample_rate, channels);
+        snprintf(cmd, sizeof(cmd),
+                 "aplay -D %s -f %s -r %u -c %u -t raw -q"
+                 " --buffer-time=%d --period-time=20000",
+                 device_.c_str(), format, sample_rate, channels,
+                 ALSA_BUFFER_TIME_US);
     } else {
-        snprintf(cmd, sizeof(cmd), "aplay -f %s -r %u -c %u -t raw -q",
-                 format, sample_rate, channels);
+        snprintf(cmd, sizeof(cmd),
+                 "aplay -f %s -r %u -c %u -t raw -q"
+                 " --buffer-time=%d --period-time=20000",
+                 format, sample_rate, channels, ALSA_BUFFER_TIME_US);
     }
 
     pipe_ = popen(cmd, "w");

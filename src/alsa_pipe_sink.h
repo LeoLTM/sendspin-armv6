@@ -10,6 +10,12 @@
 /// Avoids cross-compiling PortAudio — aplay ships with Raspberry Pi OS.
 class AlsaPipeSink {
   public:
+    /// ALSA hardware buffer duration passed to aplay via --buffer-time, in
+    /// microseconds.  Pinning this to a fixed value makes the pipeline latency
+    /// predictable.  Set PlayerRole::Config::fixed_delay_us to this constant
+    /// so the sync task compensates for the full aplay output latency.
+    static constexpr int32_t ALSA_BUFFER_TIME_US = 90000;
+
     AlsaPipeSink() = default;
     ~AlsaPipeSink();
 

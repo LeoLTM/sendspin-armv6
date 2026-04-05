@@ -3,6 +3,11 @@ project(sendspin-armv6 VERSION 0.1.0 LANGUAGES CXX)
 
 include(FetchContent)
 
+# Promote Release from the default -O2 to -O3.  Set before FetchContent so
+# the flag propagates to sendspin-cpp and its bundled FLAC/Opus decoders.
+set(CMAKE_C_FLAGS_RELEASE   "-O3 -DNDEBUG" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG" CACHE STRING "" FORCE)
+
 FetchContent_Declare(
     sendspin-cpp
     GIT_REPOSITORY https://github.com/Sendspin/sendspin-cpp.git
