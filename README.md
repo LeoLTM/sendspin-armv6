@@ -17,8 +17,8 @@ Plays music through the 3.5mm audio jack. No display, no controls — just audio
 Grab the latest release from the [Releases](../../releases) page:
 
 ```bash
-wget https://github.com/<owner>/sendspin-armv6/releases/latest/download/sendspin-armv6-linux-armv6.tar.gz
-mkdir sendspin-armv6 && tar -xzf sendspin-armv6-linux-armv6.tar.gz -C sendspin-armv6
+wget https://github.com/LeoLTM/sendspin-armv6/releases/latest/download/sendspin-armv6-linux-armv6-release.tar.gz
+mkdir sendspin-armv6 && tar -xzf sendspin-armv6-linux-armv6-release.tar.gz -C sendspin-armv6
 ```
 
 ### 2. Install the binary
@@ -119,7 +119,7 @@ Your config at `/etc/sendspin-armv6.conf` is **never touched** during an upgrade
 ### Upgrade script
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<owner>/sendspin-armv6/main/scripts/upgrade.sh \
+curl -fsSL https://raw.githubusercontent.com/LeoLTM/sendspin-armv6/main/scripts/upgrade.sh \
   | sudo bash
 ```
 
@@ -127,8 +127,8 @@ curl -fsSL https://raw.githubusercontent.com/<owner>/sendspin-armv6/main/scripts
 
 ```bash
 # 1. Download the new release (same as installation step 1)
-wget https://github.com/<owner>/sendspin-armv6/releases/latest/download/sendspin-armv6-linux-armv6.tar.gz
-mkdir sendspin-tmp && tar -xzf sendspin-armv6-linux-armv6.tar.gz -C sendspin-tmp
+wget https://github.com/LeoLTM/sendspin-armv6/releases/latest/download/sendspin-armv6-linux-armv6-release.tar.gz
+mkdir sendspin-tmp && tar -xzf sendspin-armv6-linux-armv6-release.tar.gz -C sendspin-tmp
 
 # 2. Stop, replace binary, reload service file, start
 sudo systemctl stop sendspin-armv6
