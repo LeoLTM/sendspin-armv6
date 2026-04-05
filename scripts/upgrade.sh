@@ -8,7 +8,7 @@ BINARY=/usr/local/bin/sendspin-armv6
 SERVICE_FILE=/etc/systemd/system/sendspin-armv6.service
 SERVICE=sendspin-armv6
 REPO="LeoLTM/sendspin-armv6"
-ARCHIVE=sendspin-armv6-linux-armv6.tar.gz
+ARCHIVE=sendspin-armv6-linux-armv6-release.tar.gz
 
 if [[ $EUID -ne 0 ]]; then
     echo "Error: run as root (e.g. sudo bash upgrade.sh)" >&2
