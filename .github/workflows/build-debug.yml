@@ -1,0 +1,51 @@
+name: Build Debug
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Cross-compile (Debug)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+
+      - name: Download Pi Zero W cross-compiler (abhiTronix / Bookworm GCC 14.2.0)
+        run: |
+          curl -fL \
+            "https://sourceforge.net/projects/raspberry-pi-cross-compilers/files/Raspberry%20Pi%20GCC%20Cross-Compiler%20Toolchains/Bookworm/GCC%2014.2.0/Raspberry%20Pi%201%2C%20Zero/cross-gcc-14.2.0-pi_0-1.tar.gz/download" \
+            -o toolchain.tar.gz
+          tar xf toolchain.tar.gz
+          echo "$PWD/$(ls -d cross-pi-gcc-*/bin)" >> "$GITHUB_PATH"
+
+      - name: Configure CMake (Debug)
+        run: |
+          cmake -B build \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armv6.cmake \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -G Ninja
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package
+        run: |
+          mkdir -p package
+          cp build/sendspin-armv6 package/
+          cp config/sendspin-armv6.conf package/
+          cp config/sendspin-armv6.service package/
+          tar -czf sendspin-armv6-linux-armv6-debug.tar.gz -C package .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sendspin-armv6-linux-armv6-debug
+          path: sendspin-armv6-linux-armv6-debug.tar.gz
