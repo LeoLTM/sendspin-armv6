@@ -29,7 +29,19 @@ jobs:
 
       - name: Install ALSA into cross-compiler sysroot
         run: |
+          CODENAME=$(lsb_release -sc)
           sudo dpkg --add-architecture armhf
+          sudo sed -i '/^Architectures:/d' /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed -i 's/^Types: deb/Types: deb\nArchitectures: amd64/' \
+              /etc/apt/sources.list.d/ubuntu.sources
+          cat <<EOF | sudo tee /etc/apt/sources.list.d/armhf-ports.sources
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: $CODENAME ${CODENAME}-updates ${CODENAME}-security
+          Components: main universe
+          Architectures: armhf
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
           sudo apt-get update -qq
           sudo apt-get install -y libasound2-dev:armhf
           SYSROOT=$(arm-linux-gnueabihf-gcc -print-sysroot)
@@ -82,7 +94,19 @@ jobs:
 
       - name: Install ALSA into cross-compiler sysroot
         run: |
+          CODENAME=$(lsb_release -sc)
           sudo dpkg --add-architecture armhf
+          sudo sed -i '/^Architectures:/d' /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed -i 's/^Types: deb/Types: deb\nArchitectures: amd64/' \
+              /etc/apt/sources.list.d/ubuntu.sources
+          cat <<EOF | sudo tee /etc/apt/sources.list.d/armhf-ports.sources
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: $CODENAME ${CODENAME}-updates ${CODENAME}-security
+          Components: main universe
+          Architectures: armhf
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
           sudo apt-get update -qq
           sudo apt-get install -y libasound2-dev:armhf
           SYSROOT=$(arm-linux-gnueabihf-gcc -print-sysroot)
