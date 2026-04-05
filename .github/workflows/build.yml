@@ -22,32 +22,57 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf cmake ninja-build
 
-      - name: Configure CMake
+      - name: Configure CMake (Release)
         run: |
-          cmake -B build \
+          cmake -B build-release \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armv6.cmake \
             -DCMAKE_BUILD_TYPE=Release \
             -G Ninja
 
-      - name: Build
-        run: cmake --build build
+      - name: Build (Release)
+        run: cmake --build build-release
+
+      - name: Configure CMake (Debug)
+        run: |
+          cmake -B build-debug \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armv6.cmake \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -G Ninja
+
+      - name: Build (Debug)
+        run: cmake --build build-debug
 
       - name: Prepare release archive
         run: |
-          mkdir -p release
-          cp build/sendspin-armv6 release/
-          cp config/sendspin-armv6.conf release/
-          cp config/sendspin-armv6.service release/
-          tar -czf sendspin-armv6-linux-armv6.tar.gz -C release .
+          mkdir -p release-release release-debug
 
-      - name: Upload build artifact
+          cp build-release/sendspin-armv6 release-release/
+          cp config/sendspin-armv6.conf release-release/
+          cp config/sendspin-armv6.service release-release/
+
+          cp build-debug/sendspin-armv6 release-debug/
+          cp config/sendspin-armv6.conf release-debug/
+          cp config/sendspin-armv6.service release-debug/
+
+          tar -czf sendspin-armv6-linux-armv6-release.tar.gz -C release-release .
+          tar -czf sendspin-armv6-linux-armv6-debug.tar.gz -C release-debug .
+
+      - name: Upload build artifact (Release)
         uses: actions/upload-artifact@v4
         with:
-          name: sendspin-armv6-linux-armv6
-          path: sendspin-armv6-linux-armv6.tar.gz
+          name: sendspin-armv6-linux-armv6-release
+          path: sendspin-armv6-linux-armv6-release.tar.gz
+
+      - name: Upload build artifact (Debug)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sendspin-armv6-linux-armv6-debug
+          path: sendspin-armv6-linux-armv6-debug.tar.gz
 
       - name: Upload release assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: sendspin-armv6-linux-armv6.tar.gz
+          files: |
+            sendspin-armv6-linux-armv6-release.tar.gz
+            sendspin-armv6-linux-armv6-debug.tar.gz
