@@ -5,6 +5,7 @@
 
 #include "sendspin/client.h"
 #include "sendspin/player_role.h"
+#include "sendspin/metadata_role.h"
 
 #include "alsa_pipe_sink.h"
 #include "config.h"
@@ -119,6 +120,10 @@ int main(int argc, char* argv[]) {
     };
     auto& player = client.add_player(std::move(player_config));
 
+
+    // Add metadata role (for logging track info)
+    auto& metadata = client.add_metadata();
+
     // Audio output via aplay pipe
     AlsaPipeSink audio_sink;
     if (!cfg.device.empty()) {
@@ -161,6 +166,16 @@ int main(int argc, char* argv[]) {
         void on_mute_changed(bool muted) override { sink.set_muted(muted); }
     };
 
+    struct ArmMetadataListener : MetadataRoleListener {
+        void on_metadata(const ServerMetadataStateObject& md) override {
+            if (md.title.has_value()) {
+                fprintf(stderr, ">>> Now playing: %s - %s\n",
+                        md.artist.value_or("Unknown").c_str(),
+                        md.title->c_str());
+            }
+        }
+    };
+
     struct ArmClientListener : SendspinClientListener {
         void on_time_sync_updated(float error) override {
             if (SendspinClient::get_log_level() >= LogLevel::DEBUG) {
@@ -178,10 +193,12 @@ int main(int argc, char* argv[]) {
         player.notify_audio_played(frames, timestamp);
     };
 
+    ArmMetadataListener metadata_listener;
     ArmClientListener client_listener;
     HostNetworkProvider network_provider;
 
     player.set_listener(&player_listener);
+    metadata.set_listener(&metadata_listener);
     client.set_listener(&client_listener);
     client.set_network_provider(&network_provider);
 
