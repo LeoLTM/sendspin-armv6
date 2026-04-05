@@ -60,15 +60,49 @@ journalctl -u sendspin-armv6 -f
 
 ## Audio output
 
-The Pi Zero W outputs audio through the built-in 3.5mm jack by default. Make sure analog audio is enabled:
+The **Pi Zero W has no built-in 3.5mm audio jack**. You need an external USB soundcard (or a DAC HAT). Any cheap USB audio adapter works.
+
+### Find your device
+
+Plug in the USB soundcard, then list available devices:
 
 ```bash
-# Force audio through 3.5mm jack (not HDMI)
-sudo raspi-config nonint do_audio 1
-
-# Verify aplay is available
 aplay -l
 ```
+
+Example output:
+```
+**** List of PLAYBACK Hardware Devices ****
+card 0: b1 [bcm2835 HDMI 1], device 0: ...
+card 1: Device [USB Audio Device], device 0: USB Audio [USB Audio]
+```
+
+The USB soundcard is `card 1, device 0` → device string is `plughw:1,0`.
+
+### Configure the device
+
+Set the `device` key in `/etc/sendspin-armv6.conf`:
+
+```ini
+device = plughw:1,0
+```
+
+Then restart the service:
+
+```bash
+sudo systemctl restart sendspin-armv6
+```
+
+### Set the USB soundcard as default (optional)
+
+If you want all system audio to use the USB soundcard, add to `/etc/asound.conf`:
+
+```conf
+defaults.pcm.card 1
+defaults.ctl.card 1
+```
+
+With this in place the `device` config key can be left unset.
 
 ## Configuration reference
 
@@ -77,6 +111,48 @@ aplay -l
 | `server_url` | **yes** | — | WebSocket URL of the Sendspin server |
 | `name` | no | `sendspin-armv6` | Friendly name shown in the Sendspin UI |
 | `log_level` | no | `info` | `none`, `error`, `warn`, `info`, `debug`, `verbose` |
+
+## Upgrading
+
+Your config at `/etc/sendspin-armv6.conf` is **never touched** during an upgrade.
+
+### Upgrade script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<owner>/sendspin-armv6/main/scripts/upgrade.sh \
+  | sudo bash
+```
+
+### Manual upgrade
+
+```bash
+# 1. Download the new release (same as installation step 1)
+wget https://github.com/<owner>/sendspin-armv6/releases/latest/download/sendspin-armv6-linux-armv6.tar.gz
+mkdir sendspin-tmp && tar -xzf sendspin-armv6-linux-armv6.tar.gz -C sendspin-tmp
+
+# 2. Stop, replace binary, reload service file, start
+sudo systemctl stop sendspin-armv6
+sudo cp sendspin-tmp/sendspin-armv6 /usr/local/bin/
+sudo cp sendspin-tmp/sendspin-armv6.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl start sendspin-armv6
+```
+
+## Troubleshooting
+
+**Crash-loop / SEGV at startup** — the service stops restarting after 5 rapid failures. To re-enable after fixing the issue:
+
+```bash
+sudo systemctl reset-failed sendspin-armv6
+sudo systemctl start sendspin-armv6
+```
+
+Common causes:
+- USB soundcard not connected or `aplay` not available — plug in the soundcard and check `aplay -l`
+- Network not ready — check that the Pi can reach the server IP before the service starts
+- Wrong `server_url` in the config — verify with `curl http://<ip>:8928/`
+
+**No audio / aplay errors** — run `aplay -l` to find the correct device name and set it with `device = plughw:X,Y` in the config.
 
 ## Building from source
 

@@ -1,10 +1,28 @@
 #include "alsa_pipe_sink.h"
 
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 
 AlsaPipeSink::~AlsaPipeSink() { stop(); }
+
+void AlsaPipeSink::set_device(const std::string& device) {
+    // Validate: allow only characters that are safe in a shell argument.
+    // ALSA device names contain alphanumerics, colon, comma, underscore,
+    // hyphen, period and equals (e.g. "plughw:1,0", "sysdefault:CARD=Device").
+    for (unsigned char c : device) {
+        if (!std::isalnum(c) && c != ':' && c != ',' && c != '_' &&
+            c != '-' && c != '.' && c != '=') {
+            fprintf(stderr,
+                    "AlsaPipeSink: invalid character '%c' in device name — "
+                    "ignoring device setting\n",
+                    c);
+            return;
+        }
+    }
+    device_ = device;
+}
 
 bool AlsaPipeSink::configure(uint32_t sample_rate, uint8_t channels,
                              uint8_t bits_per_sample) {
@@ -28,8 +46,13 @@ bool AlsaPipeSink::configure(uint32_t sample_rate, uint8_t channels,
 
     // Build aplay command. -q suppresses verbose output, -t raw for raw PCM.
     char cmd[256];
-    snprintf(cmd, sizeof(cmd), "aplay -f %s -r %u -c %u -t raw -q",
-             format, sample_rate, channels);
+    if (!device_.empty()) {
+        snprintf(cmd, sizeof(cmd), "aplay -D %s -f %s -r %u -c %u -t raw -q",
+                 device_.c_str(), format, sample_rate, channels);
+    } else {
+        snprintf(cmd, sizeof(cmd), "aplay -f %s -r %u -c %u -t raw -q",
+                 format, sample_rate, channels);
+    }
 
     pipe_ = popen(cmd, "w");
     if (!pipe_) {

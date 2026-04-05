@@ -41,6 +41,8 @@ bool load_config(const std::string& path, Config& config) {
             config.name = value;
         } else if (key == "log_level") {
             config.log_level = value;
+        } else if (key == "device") {
+            config.device = value;
         } else {
             fprintf(stderr, "%s:%d: unknown key '%s'\n", path.c_str(), line_num,
                     key.c_str());

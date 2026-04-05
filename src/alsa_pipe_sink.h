@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <string>
 
 /// Audio sink that pipes decoded PCM to aplay (ALSA).
 /// Avoids cross-compiling PortAudio — aplay ships with Raspberry Pi OS.
@@ -33,11 +34,16 @@ class AlsaPipeSink {
     /// Set mute state.
     void set_muted(bool muted);
 
+    /// Set ALSA device name (e.g. "plughw:1,0"). Must be called before the
+    /// first configure(). Empty string uses the system default device.
+    void set_device(const std::string& device);
+
     /// Callback for timing feedback — wired to player.notify_audio_played().
     std::function<void(uint32_t frames, int64_t timestamp)> on_frames_played;
 
   private:
     FILE* pipe_{nullptr};
+    std::string device_;
     uint32_t sample_rate_{0};
     uint8_t channels_{0};
     uint8_t bits_per_sample_{0};

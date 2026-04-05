@@ -2,12 +2,17 @@
 Description=Sendspin ARMv6 Audio Player
 After=network-online.target sound.target
 Wants=network-online.target
+# Stop restarting after 5 rapid failures — prevents a crash-loop from
+# hammering the system indefinitely. Run: systemctl reset-failed sendspin-armv6
+# to re-enable after resolving the issue.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 ExecStart=/usr/local/bin/sendspin-armv6
 Restart=on-failure
-RestartSec=5
-User=pi
+RestartSec=10
+User=root
 SupplementaryGroups=audio
 Nice=-10
 

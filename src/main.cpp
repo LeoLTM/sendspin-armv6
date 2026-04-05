@@ -106,6 +106,9 @@ int main(int argc, char* argv[]) {
 
     // Audio output via aplay pipe
     AlsaPipeSink audio_sink;
+    if (!cfg.device.empty()) {
+        audio_sink.set_device(cfg.device);
+    }
 
     // --- Listener implementations ---
 
