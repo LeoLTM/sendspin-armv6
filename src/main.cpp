@@ -4,7 +4,6 @@
 /// via aplay (ALSA).  Designed to run as a systemd service.
 
 #include "sendspin/client.h"
-#include "sendspin/metadata_role.h"
 #include "sendspin/player_role.h"
 
 #include "alsa_pipe_sink.h"
@@ -15,9 +14,11 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <getopt.h>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 using namespace sendspin;
 
@@ -80,9 +81,26 @@ int main(int argc, char* argv[]) {
     }
     SendspinClient::set_log_level(log_level);
 
+    // Derive a unique, persistent client_id from /etc/machine-id (systemd).
+    // Falls back to hostname.  The spec requires this to be unique per device
+    // so that servers can track group membership and de-duplicate connections.
+    std::string client_id;
+    {
+        std::ifstream mid("/etc/machine-id");
+        std::getline(mid, client_id);
+    }
+    if (client_id.empty()) {
+        char hbuf[256] = {};
+        if (gethostname(hbuf, sizeof(hbuf)) == 0 && hbuf[0] != '\0') {
+            client_id = hbuf;
+        } else {
+            client_id = "sendspin-armv6";
+        }
+    }
+
     // Configure client
     SendspinClientConfig client_config;
-    client_config.client_id = "sendspin-armv6";
+    client_config.client_id = "sendspin-armv6-" + client_id;
     client_config.name = cfg.name;
     client_config.product_name = "sendspin-armv6";
     client_config.manufacturer = "sendspin-armv6";
@@ -100,9 +118,6 @@ int main(int argc, char* argv[]) {
         {SendspinCodecFormat::PCM, 2, 48000, 16},
     };
     auto& player = client.add_player(std::move(player_config));
-
-    // Add metadata role (for logging track info)
-    auto& metadata = client.add_metadata();
 
     // Audio output via aplay pipe
     AlsaPipeSink audio_sink;
@@ -146,16 +161,6 @@ int main(int argc, char* argv[]) {
         void on_mute_changed(bool muted) override { sink.set_muted(muted); }
     };
 
-    struct ArmMetadataListener : MetadataRoleListener {
-        void on_metadata(const ServerMetadataStateObject& md) override {
-            if (md.title.has_value()) {
-                fprintf(stderr, ">>> Now playing: %s - %s\n",
-                        md.artist.value_or("Unknown").c_str(),
-                        md.title->c_str());
-            }
-        }
-    };
-
     struct ArmClientListener : SendspinClientListener {
         void on_time_sync_updated(float error) override {
             if (SendspinClient::get_log_level() >= LogLevel::DEBUG) {
@@ -173,12 +178,10 @@ int main(int argc, char* argv[]) {
         player.notify_audio_played(frames, timestamp);
     };
 
-    ArmMetadataListener metadata_listener;
     ArmClientListener client_listener;
     HostNetworkProvider network_provider;
 
     player.set_listener(&player_listener);
-    metadata.set_listener(&metadata_listener);
     client.set_listener(&client_listener);
     client.set_network_provider(&network_provider);
 
@@ -197,8 +200,6 @@ int main(int argc, char* argv[]) {
     // Main loop
     while (running.load()) {
         client.loop();
-        audio_sink.set_volume(player.get_volume());
-        audio_sink.set_muted(player.get_muted());
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
