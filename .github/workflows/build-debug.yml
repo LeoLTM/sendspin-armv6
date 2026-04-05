@@ -44,6 +44,16 @@ jobs:
       - name: Add Toolchain to PATH
         run: echo "$PWD/rpi-toolchain/bin" >> "$GITHUB_PATH"
 
+      # 4. Install ALSA headers and ARMv6 library into the cross-compiler sysroot.
+      - name: Install ALSA into cross-compiler sysroot
+        run: |
+          sudo dpkg --add-architecture armhf
+          sudo apt-get update -qq
+          sudo apt-get install -y libasound2-dev:armhf
+          SYSROOT=$(arm-linux-gnueabihf-gcc -print-sysroot)
+          sudo cp -r /usr/include/alsa "$SYSROOT/usr/include/"
+          sudo cp -Pf /usr/lib/arm-linux-gnueabihf/libasound.so* "$SYSROOT/usr/lib/"
+
       - name: Configure CMake (Debug)
         run: |
           cmake -B build \

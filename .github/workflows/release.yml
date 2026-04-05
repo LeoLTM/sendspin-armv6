@@ -27,6 +27,15 @@ jobs:
           tar xf toolchain.tar.gz
           echo "$PWD/$(ls -d cross-pi-gcc-*/bin)" >> "$GITHUB_PATH"
 
+      - name: Install ALSA into cross-compiler sysroot
+        run: |
+          sudo dpkg --add-architecture armhf
+          sudo apt-get update -qq
+          sudo apt-get install -y libasound2-dev:armhf
+          SYSROOT=$(arm-linux-gnueabihf-gcc -print-sysroot)
+          sudo cp -r /usr/include/alsa "$SYSROOT/usr/include/"
+          sudo cp -Pf /usr/lib/arm-linux-gnueabihf/libasound.so* "$SYSROOT/usr/lib/"
+
       - name: Configure CMake (Release)
         run: |
           cmake -B build \
@@ -70,6 +79,15 @@ jobs:
             -o toolchain.tar.gz
           tar xf toolchain.tar.gz
           echo "$PWD/$(ls -d cross-pi-gcc-*/bin)" >> "$GITHUB_PATH"
+
+      - name: Install ALSA into cross-compiler sysroot
+        run: |
+          sudo dpkg --add-architecture armhf
+          sudo apt-get update -qq
+          sudo apt-get install -y libasound2-dev:armhf
+          SYSROOT=$(arm-linux-gnueabihf-gcc -print-sysroot)
+          sudo cp -r /usr/include/alsa "$SYSROOT/usr/include/"
+          sudo cp -Pf /usr/lib/arm-linux-gnueabihf/libasound.so* "$SYSROOT/usr/lib/"
 
       - name: Configure CMake (Debug)
         run: |
