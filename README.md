@@ -2,13 +2,13 @@
 
 Headless [Sendspin](https://github.com/Sendspin/sendspin-cpp) audio client for ARMv6 devices like the **Raspberry Pi Zero W**.
 
-Plays music through the 3.5mm audio jack. No display, no controls — just audio output as a systemd daemon.
+Plays music through available ALSA devices. No display, no controls, just audio output as a systemd daemon.
 
 ## How it works
 
 - Uses [sendspin-cpp](https://github.com/Sendspin/sendspin-cpp) for the Sendspin protocol, audio decoding, and time synchronization
-- Pipes decoded PCM to `aplay` (ALSA) — no PortAudio dependency
-- Cross-compiled for ARMv6 in GitHub Actions — no local toolchain needed
+- Pipes decoded PCM to `aplay` (ALSA), no PortAudio dependency
+- Cross-compiled for ARMv6 in GitHub Actions, no local toolchain needed
 
 ## Installation
 
@@ -41,6 +41,8 @@ Set `server_url` to your Sendspin server's WebSocket URL:
 server_url = ws://192.168.1.10:8928/sendspin
 name = Living Room Pi
 log_level = info
+# Optional: set the ALSA device for audio output (see next section)
+device = plughw:1,0
 ```
 
 ### 4. Set up the systemd daemon
@@ -77,7 +79,7 @@ card 0: b1 [bcm2835 HDMI 1], device 0: ...
 card 1: Device [USB Audio Device], device 0: USB Audio [USB Audio]
 ```
 
-The USB soundcard is `card 1, device 0` → device string is `plughw:1,0`.
+The USB soundcard in this example is `card 1, device 0` → device string is `plughw:1,0`.
 
 ### Configure the device
 
@@ -111,6 +113,7 @@ With this in place the `device` config key can be left unset.
 | `server_url` | **yes** | — | WebSocket URL of the Sendspin server |
 | `name` | no | `sendspin-armv6` | Friendly name shown in the Sendspin UI |
 | `log_level` | no | `info` | `none`, `error`, `warn`, `info`, `debug`, `verbose` |
+| `device` | no | Default system audio device (`aplay -L`) | ALSA device string for audio output (e.g. `plughw:1,0`) |
 
 ## Upgrading
 
@@ -155,6 +158,8 @@ Common causes:
 **No audio / aplay errors** — run `aplay -l` to find the correct device name and set it with `device = plughw:X,Y` in the config.
 
 ## Building from source
+
+> I never tested this locally because I didn't want to mess with the local toolchain. Feel free to open a PR if you have a better local build setup.
 
 Building happens in GitHub Actions (cross-compilation for ARMv6). Push to `main` or create a tag to trigger a build.
 
