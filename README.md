@@ -12,6 +12,8 @@ Plays music through available ALSA devices. No display, no controls, just audio 
 
 ## Installation
 
+> You can just run the `scripts/install.sh` script to do all of this automatically, but the manual steps are documented below if you want to understand what's going on or do it yourself.
+
 ### 1. Download the binary
 
 Grab the latest release from the [Releases](../../releases) page:
@@ -139,6 +141,28 @@ sudo cp sendspin-tmp/sendspin-armv6 /usr/local/bin/
 sudo cp sendspin-tmp/sendspin-armv6.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl start sendspin-armv6
+```
+
+## Uninstall
+
+### Uninstall script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LeoLTM/sendspin-armv6/main/scripts/uninstall.sh \
+  | sudo bash
+```
+
+### Manual uninstall
+
+```bash
+sudo systemctl stop sendspin-armv6
+sudo systemctl disable sendspin-armv6
+sudo rm /usr/local/bin/sendspin-armv6
+sudo rm /etc/systemd/system/sendspin-armv6.service
+sudo systemctl daemon-reload
+
+# Optional: remove config file if you don't plan to reinstall or want to start fresh
+sudo rm /etc/sendspin-armv6.conf
 ```
 
 ## Troubleshooting
