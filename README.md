@@ -45,6 +45,8 @@ name = Living Room Pi
 log_level = info
 # Optional: set the ALSA device for audio output (see next section)
 device = plughw:1,0
+# Optional: set initial volume (0-100)
+initial_volume = 80
 ```
 
 ### 4. Set up the systemd daemon
@@ -116,6 +118,7 @@ With this in place the `device` config key can be left unset.
 | `name` | no | `sendspin-armv6` | Friendly name shown in the Sendspin UI |
 | `log_level` | no | `info` | `none`, `error`, `warn`, `info`, `debug`, `verbose` |
 | `device` | no | Default system audio device (`aplay -L`) | ALSA device string for audio output (e.g. `plughw:1,0`) |
+| `initial_volume` | no | Server-controlled | Initial hardware volume at startup (0–100) |
 
 ## Upgrading
 
@@ -175,6 +178,7 @@ sudo systemctl start sendspin-armv6
 ```
 
 Common causes:
+- Wrong architecture binary (e.g. ARMv6 on ARMv7) - make sure your device is ARMv6
 - USB soundcard not connected or `aplay` not available — plug in the soundcard and check `aplay -l`
 - Network not ready — check that the Pi can reach the server IP before the service starts
 - Wrong `server_url` in the config — verify with `curl http://<ip>:8928/`

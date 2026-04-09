@@ -200,13 +200,36 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Connect to the configured Sendspin server
-    fprintf(stderr, "Connecting to %s...\n", cfg.server_url.c_str());
-    client.connect_to(cfg.server_url);
+    // Apply the configured startup volume before the first connection so the
+    // hardware is at the expected level even before the server issues a
+    // VOLUME command.  Without this the ALSA sink defaults to 100 while the
+    // SDK reports 0 until the server speaks.
+    if (cfg.initial_volume >= 0) {
+        auto vol = static_cast<uint8_t>(cfg.initial_volume);
+        audio_sink.set_volume(vol);
+        player.update_volume(vol);
+        fprintf(stderr, "Initial volume set to %u\n", vol);
+    }
 
-    // Main loop
+    // Connect to the configured Sendspin server and reconnect automatically
+    // whenever the connection drops (e.g. server restart mid-playback).
+    // The first attempt fires immediately; subsequent ones every 5 seconds.
+    using clock = std::chrono::steady_clock;
+    static constexpr auto RECONNECT_INTERVAL = std::chrono::seconds(5);
+    auto last_connect_attempt = clock::now() - RECONNECT_INTERVAL;
+
     while (running.load()) {
         client.loop();
+
+        if (!client.is_connected()) {
+            auto now = clock::now();
+            if (now - last_connect_attempt >= RECONNECT_INTERVAL) {
+                fprintf(stderr, "Connecting to %s...\n", cfg.server_url.c_str());
+                client.connect_to(cfg.server_url);
+                last_connect_attempt = now;
+            }
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
