@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
 
 jobs:
   build:
@@ -84,6 +85,7 @@ jobs:
           cp build/sendspin-armv6 package/
           cp config/sendspin-armv6.conf package/
           cp config/sendspin-armv6.service package/
+          cp scripts/upgrade.sh package/
           tar -czf sendspin-armv6-linux-armv6-release.tar.gz -C package .
 
       - name: Upload artifact
