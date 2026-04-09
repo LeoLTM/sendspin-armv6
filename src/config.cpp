@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 
 static std::string trim(const std::string& s) {
@@ -43,6 +44,19 @@ bool load_config(const std::string& path, Config& config) {
             config.log_level = value;
         } else if (key == "device") {
             config.device = value;
+        } else if (key == "initial_volume") {
+            try {
+                int v = std::stoi(value);
+                if (v < 0 || v > 100) {
+                    fprintf(stderr, "%s:%d: initial_volume must be 0-100, ignoring\n",
+                            path.c_str(), line_num);
+                } else {
+                    config.initial_volume = v;
+                }
+            } catch (const std::exception&) {
+                fprintf(stderr, "%s:%d: invalid initial_volume value '%s', ignoring\n",
+                        path.c_str(), line_num, value.c_str());
+            }
         } else {
             fprintf(stderr, "%s:%d: unknown key '%s'\n", path.c_str(), line_num,
                     key.c_str());

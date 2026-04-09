@@ -8,6 +8,7 @@ struct Config {
     std::string name = "sendspin-armv6";
     std::string log_level = "info";
     std::string device;       // ALSA device, e.g. plughw:1,0 (empty = system default)
+    int initial_volume = -1;  // 0-100 to override hardware volume on startup; -1 = server default
 };
 
 /// Parse a simple key=value config file.
