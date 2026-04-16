@@ -13,6 +13,10 @@ Plays music through available ALSA devices. No display, no controls, just audio 
 ## Installation
 
 > You can just run the `scripts/install.sh` script to do all of this automatically, but the manual steps are documented below if you want to understand what's going on or do it yourself.
+> ```bash
+>  curl -fsSL https://raw.githubusercontent.com/LeoLTM/sendspin-armv6/main/scripts/install.sh \
+>  | sudo bash
+> ```
 
 ### 1. Download the binary
 
