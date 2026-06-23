@@ -44,6 +44,8 @@ bool load_config(const std::string& path, Config& config) {
             config.log_level = value;
         } else if (key == "device") {
             config.device = value;
+        } else if (key == "mixer") {
+            config.mixer = value;
         } else if (key == "initial_volume") {
             try {
                 int v = std::stoi(value);
