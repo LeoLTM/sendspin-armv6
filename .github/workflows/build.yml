@@ -61,6 +61,9 @@ jobs:
       #    is Bookworm-based (glibc 2.36), causing undefined-reference link errors.
       #    Bookworm's libasound2 targets glibc 2.36 and links without errors.
       - name: Install ALSA into cross-compiler sysroot
+        # Skip this step if we restored the toolchain from cache, 
+        # as ALSA is already injected into the cached sysroot.
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           TMP=$(mktemp -d)
           # Debian Bookworm stable — alsa-lib 1.2.8, built against glibc 2.36
@@ -70,8 +73,11 @@ jobs:
           dpkg-deb --extract "$TMP/libasound2.deb"     "$TMP/alsa/"
           dpkg-deb --extract "$TMP/libasound2-dev.deb" "$TMP/alsa/"
           SYSROOT=$(arm-linux-gnueabihf-gcc -print-sysroot)
-          sudo cp -r "$TMP/alsa/usr/include/alsa" "$SYSROOT/usr/include/"
-          sudo cp -Pf "$TMP"/alsa/usr/lib/arm-linux-gnueabihf/libasound* "$SYSROOT/usr/lib/"
+          
+          # Do NOT use sudo here. The sysroot is owned by the runner user.
+          # Using sudo causes permission denied errors during the caching step.
+          cp -r "$TMP/alsa/usr/include/alsa" "$SYSROOT/usr/include/"
+          cp -Pf "$TMP"/alsa/usr/lib/arm-linux-gnueabihf/libasound* "$SYSROOT/usr/lib/"
           rm -rf "$TMP"
 
       # 5. Configure CMake with static linking flags for C++ standard libraries
@@ -91,13 +97,15 @@ jobs:
       - name: Package
         run: |
           mkdir -p package
-          cp build/sendspin-armv6 package/
-          cp config/sendspin-armv6.conf package/
-          cp config/sendspin-armv6.service package/
+          # Use cp -p to preserve file permissions (e.g. +x for executables)
+          cp -p build/sendspin-armv6 package/
+          cp -p config/sendspin-armv6.conf package/
+          cp -p config/sendspin-armv6.service package/
           
-          # Only include the upgrade script in release packages
+          # Only include specific scripts in release packages
           if [ "${{ matrix.build_type }}" = "Release" ]; then
-            cp scripts/upgrade.sh package/
+            cp -p scripts/upgrade.sh package/
+            cp -p scripts/uninstall.sh package/
           fi
           
           # Convert build type to lowercase for the filename

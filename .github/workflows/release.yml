@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
+    # This workflow should strictly run on tags to prevent releases named "main"
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -31,7 +31,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Automatically extracts tag name from ref, even on manual trigger
+          # Automatically extracts tag name from ref
           tag_name: ${{ github.ref_name }}
           files: |
             sendspin-armv6-linux-armv6-release.tar.gz
