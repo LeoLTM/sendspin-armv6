@@ -69,11 +69,14 @@ jobs:
           sudo cp -Pf "$TMP"/alsa/usr/lib/arm-linux-gnueabihf/libasound* "$SYSROOT/usr/lib/"
           rm -rf "$TMP"
 
+      # 5. Configure CMake with static linking flags for C++ standard libraries
+      #    to avoid GLIBCXX version mismatch errors on target systems.
       - name: Configure CMake (Release)
         run: |
           cmake -B build \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armv6.cmake \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
             -G Ninja
 
       - name: Build
