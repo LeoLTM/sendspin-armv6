@@ -1,4 +1,4 @@
-name: Build Debug
+name: Build
 
 on:
   push:
@@ -10,8 +10,12 @@ on:
 
 jobs:
   build:
-    name: Cross-compile (Debug)
+    name: Cross-compile (${{ matrix.build_type }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build_type: [Debug, Release]
+    
     steps:
       - uses: actions/checkout@v4
 
@@ -47,10 +51,19 @@ jobs:
         run: echo "$PWD/rpi-toolchain/bin" >> "$GITHUB_PATH"
 
       # 4. Install ALSA headers and ARMv6 library into the cross-compiler sysroot.
-      #    See build-release.yml for the rationale on using Debian Bookworm packages.
+      #    The toolchain ships without libasound; we graft the armhf package in so
+      #    the cross-compiler finds alsa/asoundlib.h and libasound.so with no extra
+      #    CMake flags required.
+      #
+      #    We download Debian Bookworm armhf packages directly instead of using
+      #    apt.  Ubuntu Noble's libasound2-dev:armhf is compiled against glibc 2.38
+      #    (__isoc23_sscanf@GLIBC_2.38 etc.), but the abhiTronix toolchain sysroot
+      #    is Bookworm-based (glibc 2.36), causing undefined-reference link errors.
+      #    Bookworm's libasound2 targets glibc 2.36 and links without errors.
       - name: Install ALSA into cross-compiler sysroot
         run: |
           TMP=$(mktemp -d)
+          # Debian Bookworm stable — alsa-lib 1.2.8, built against glibc 2.36
           BASE="http://deb.debian.org/debian/pool/main/a/alsa-lib"
           curl -fsSL "$BASE/libasound2_1.2.8-1+b1_armhf.deb"     -o "$TMP/libasound2.deb"
           curl -fsSL "$BASE/libasound2-dev_1.2.8-1+b1_armhf.deb" -o "$TMP/libasound2-dev.deb"
@@ -63,27 +76,36 @@ jobs:
 
       # 5. Configure CMake with static linking flags for C++ standard libraries
       #    to avoid GLIBCXX version mismatch errors on target systems.
-      - name: Configure CMake (Debug)
+      - name: Configure CMake
         run: |
           cmake -B build \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-armv6.cmake \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
             -G Ninja
 
       - name: Build
         run: cmake --build build
 
+      # 6. Package files dynamic based on build type to retain original logic
       - name: Package
         run: |
           mkdir -p package
           cp build/sendspin-armv6 package/
           cp config/sendspin-armv6.conf package/
           cp config/sendspin-armv6.service package/
-          tar -czf sendspin-armv6-linux-armv6-debug.tar.gz -C package .
+          
+          # Only include the upgrade script in release packages
+          if [ "${{ matrix.build_type }}" = "Release" ]; then
+            cp scripts/upgrade.sh package/
+          fi
+          
+          # Convert build type to lowercase for the filename
+          BUILD_TYPE_LOWER=$(echo "${{ matrix.build_type }}" | tr '[:upper:]' '[:lower:]')
+          tar -czf "sendspin-armv6-linux-armv6-${BUILD_TYPE_LOWER}.tar.gz" -C package .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sendspin-armv6-linux-armv6-debug
-          path: sendspin-armv6-linux-armv6-debug.tar.gz
+          name: sendspin-armv6-linux-armv6-${{ matrix.build_type == 'Debug' && 'debug' || 'release' }}
+          path: sendspin-armv6-linux-armv6-${{ matrix.build_type == 'Debug' && 'debug' || 'release' }}.tar.gz
