@@ -2,21 +2,20 @@ name: Release
 
 on:
   push:
+    # This workflow should strictly run on tags to prevent releases named "main"
     tags: ["v*"]
 
 permissions:
   contents: write
 
 jobs:
-  build-release:
-    uses: ./.github/workflows/build-release.yml
-
-  build-debug:
-    uses: ./.github/workflows/build-debug.yml
+  # Call the combined build workflow which builds both Debug and Release in parallel
+  run-builds:
+    uses: ./.github/workflows/build.yml
 
   publish:
     name: Publish GitHub Release
-    needs: [build-release, build-debug]
+    needs: [run-builds]
     runs-on: ubuntu-latest
     steps:
       - name: Download release artifact
@@ -32,6 +31,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Automatically extracts tag name from ref
+          tag_name: ${{ github.ref_name }}
           files: |
             sendspin-armv6-linux-armv6-release.tar.gz
             sendspin-armv6-linux-armv6-debug.tar.gz
