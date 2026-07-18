@@ -44,7 +44,7 @@ sudo nano /etc/sendspin-armv6.conf
 Set `server_url` to your Sendspin server's WebSocket URL:
 
 ```ini
-server_url = ws://192.168.1.10:8928/sendspin
+server_url = ws://192.168.1.10:8927/sendspin
 name = Living Room Pi
 log_level = info
 # Optional: set the ALSA device for audio output (see next section)
@@ -185,7 +185,7 @@ Common causes:
 - Wrong architecture binary (e.g. ARMv6 on ARMv7) - make sure your device is ARMv6
 - USB soundcard not connected or `aplay` not available — plug in the soundcard and check `aplay -l`
 - Network not ready — check that the Pi can reach the server IP before the service starts
-- Wrong `server_url` in the config — verify with `curl http://<ip>:8928/`
+- Wrong `server_url` in the config — verify with `curl http://<ip>:8927/`
 
 **No audio / aplay errors** — run `aplay -l` to find the correct device name and set it with `device = plughw:X,Y` in the config.
 
