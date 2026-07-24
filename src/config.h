@@ -10,6 +10,7 @@ struct Config {
     std::string device;                // ALSA device, e.g. plughw:1,0 (empty = system default)
     int initial_volume = -1;           // 0-100 to override hardware volume on startup; -1 = server default
     int initial_static_delay_ms = -1;  // 0-5000 ms; -1 = no initial delay
+    int idle_timeout_s = 0;            // 0 = disabled (device stays open permanently)
 };
 
 /// Parse a simple key=value config file.

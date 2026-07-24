@@ -70,6 +70,19 @@ bool load_config(const std::string& path, Config& config) {
                 fprintf(stderr, "%s:%d: invalid initial_static_delay value '%s', ignoring\n",
                         path.c_str(), line_num, value.c_str());
             }
+        } else if (key == "idle_timeout") {
+            try {
+                int v = std::stoi(value);
+                if (v < 0) {
+                    fprintf(stderr, "%s:%d: idle_timeout must be >= 0, ignoring\n",
+                            path.c_str(), line_num);
+                } else {
+                    config.idle_timeout_s = v;
+                }
+            } catch (const std::exception&) {
+                fprintf(stderr, "%s:%d: invalid idle_timeout value '%s', ignoring\n",
+                        path.c_str(), line_num, value.c_str());
+            }
         } else {
             fprintf(stderr, "%s:%d: unknown key '%s'\n", path.c_str(), line_num,
                     key.c_str());
