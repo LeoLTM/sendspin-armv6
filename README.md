@@ -123,6 +123,7 @@ With this in place the `device` config key can be left unset.
 | `log_level` | no | `info` | `none`, `error`, `warn`, `info`, `debug`, `verbose` |
 | `device` | no | Default system audio device (`aplay -L`) | ALSA device string for audio output (e.g. `plughw:1,0`) |
 | `initial_volume` | no | Server-controlled | Initial hardware volume at startup (0–100) |
+| `idle_timeout` | no | `0` (disabled) | Idle timeout in seconds before releasing the audio device |
 
 ## Upgrading
 

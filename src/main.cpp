@@ -23,7 +23,7 @@
 using namespace sendspin;
 
 static constexpr const char* DEFAULT_CONFIG_PATH = "/etc/sendspin-armv6.conf";
-static constexpr const char* VERSION = "0.1.0";
+static constexpr const char* VERSION = "0.1.7";
 
 static std::atomic<bool> running{true};
 
@@ -43,6 +43,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "Usage: %s [options]\n\n", prog);
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -c PATH   Config file (default: %s)\n", DEFAULT_CONFIG_PATH);
+    fprintf(stderr, "  -t SECS   Idle timeout in seconds before releasing audio device (0=disable)\n");
     fprintf(stderr, "  -h        Show this help\n");
     fprintf(stderr, "  -V        Show version\n");
 }
@@ -53,10 +54,12 @@ int main(int argc, char* argv[]) {
 
     // Parse command line
     std::string config_path = DEFAULT_CONFIG_PATH;
+    int idle_timeout_override = -1;
     int opt;
-    while ((opt = getopt(argc, argv, "c:hV")) != -1) {
+    while ((opt = getopt(argc, argv, "c:t:hV")) != -1) {
         switch (opt) {
             case 'c': config_path = optarg; break;
+            case 't': idle_timeout_override = std::atoi(optarg); break;
             case 'h': print_usage(argv[0]); return 0;
             case 'V': fprintf(stdout, "sendspin-armv6 %s\n", VERSION); return 0;
             default: print_usage(argv[0]); return 1;
@@ -68,6 +71,11 @@ int main(int argc, char* argv[]) {
     if (!load_config(config_path, cfg)) {
         return 1;
     }
+
+    if (idle_timeout_override >= 0) {
+        cfg.idle_timeout_s = idle_timeout_override;
+    }
+
     if (cfg.server_url.empty()) {
         fprintf(stderr, "Error: server_url is required in %s\n", config_path.c_str());
         return 1;
@@ -80,6 +88,32 @@ int main(int argc, char* argv[]) {
                 cfg.log_level.c_str());
     }
     SendspinClient::set_log_level(log_level);
+
+    // --- STARTUP LOGGING BLOCK ---
+    fprintf(stderr, "\n");
+    fprintf(stderr, "=================================================================\n");
+    fprintf(stderr, " Sendspin ARMv6 Client - Version: %s\n", VERSION);
+    fprintf(stderr, " Build Date: %s %s\n", __DATE__, __TIME__);
+    fprintf(stderr, "=================================================================\n");
+    fprintf(stderr, " Active Configuration:\n");
+    fprintf(stderr, "  Config File   : %s\n", config_path.c_str());
+    fprintf(stderr, "  Friendly Name : %s\n", cfg.name.c_str());
+    fprintf(stderr, "  Audio Device  : %s\n", cfg.device.empty() ? "System Default" : cfg.device.c_str());
+    fprintf(stderr, "  Server URL    : %s\n", cfg.server_url.c_str());
+    fprintf(stderr, "  Idle Timeout  : %s\n", cfg.idle_timeout_s == 0 ? "inaktiv" : (std::to_string(cfg.idle_timeout_s) + " seconds").c_str());
+    
+    const char* log_level_str = "info";
+    switch (log_level) {
+        case LogLevel::NONE: log_level_str = "none"; break;
+        case LogLevel::ERROR: log_level_str = "error"; break;
+        case LogLevel::WARN: log_level_str = "warn"; break;
+        case LogLevel::INFO: log_level_str = "info"; break;
+        case LogLevel::DEBUG: log_level_str = "debug"; break;
+        case LogLevel::VERBOSE: log_level_str = "verbose"; break;
+    }
+    fprintf(stderr, "  Log Level     : %s\n", log_level_str);
+    fprintf(stderr, "=================================================================\n\n");
+    // --- END STARTUP LOGGING BLOCK ---
 
     // Derive a unique, persistent client_id from /etc/machine-id (systemd).
     // Falls back to hostname.  The spec requires this to be unique per device
@@ -139,9 +173,15 @@ int main(int argc, char* argv[]) {
     // --- Listener implementations ---
 
     struct ArmPlayerListener : PlayerRoleListener {
+        bool stream_active{false};
+        bool device_open{false};
+        std::chrono::steady_clock::time_point last_stream_end_time{std::chrono::steady_clock::now()};
+        int idle_timeout_s{0};
+
         AlsaPipeSink& sink;
         PlayerRole& player;
-        ArmPlayerListener(AlsaPipeSink& s, PlayerRole& p) : sink(s), player(p) {}
+        ArmPlayerListener(AlsaPipeSink& s, PlayerRole& p, int timeout_s) 
+            : sink(s), player(p), idle_timeout_s(timeout_s) {}
 
         size_t on_audio_write(uint8_t* data, size_t length,
                               uint32_t timeout_ms) override {
@@ -150,6 +190,8 @@ int main(int argc, char* argv[]) {
 
         void on_stream_start() override {
             fprintf(stderr, ">>> Stream started\n");
+            this->stream_active = true;
+            this->device_open = true;
             auto& params = player.get_current_stream_params();
             if (params.sample_rate.has_value() && params.channels.has_value() &&
                 params.bit_depth.has_value()) {
@@ -160,6 +202,12 @@ int main(int argc, char* argv[]) {
 
         void on_stream_end() override {
             fprintf(stderr, ">>> Stream ended\n");
+            this->stream_active = false;
+            this->last_stream_end_time = std::chrono::steady_clock::now();
+            
+            if (this->idle_timeout_s > 0) {
+                fprintf(stderr, ">>> Audio device will be released in %d seconds if idle\n", this->idle_timeout_s);
+            }
             sink.clear();
         }
 
@@ -182,7 +230,7 @@ int main(int argc, char* argv[]) {
         bool is_network_ready() override { return true; }
     };
 
-    ArmPlayerListener player_listener(audio_sink, player);
+    ArmPlayerListener player_listener(audio_sink, player, cfg.idle_timeout_s);
     audio_sink.on_frames_played = [&player](uint32_t frames, int64_t timestamp) {
         player.notify_audio_played(frames, timestamp);
     };
@@ -196,8 +244,6 @@ int main(int argc, char* argv[]) {
     client.set_network_provider(&network_provider);
 
     // Start the WebSocket server
-    fprintf(stderr, "sendspin-armv6 %s — %s\n", VERSION, cfg.name.c_str());
-
     if (!client.start_server()) {
         fprintf(stderr, "Failed to start server\n");
         return 1;
@@ -223,6 +269,17 @@ int main(int argc, char* argv[]) {
 
     while (running.load()) {
         client.loop();
+
+        // Idle timeout check to release audio device
+        if (cfg.idle_timeout_s > 0 && !player_listener.stream_active && player_listener.device_open) {
+            auto now = clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - player_listener.last_stream_end_time).count();
+            if (elapsed >= cfg.idle_timeout_s) {
+                fprintf(stderr, ">>> Idle timeout reached (%d s), releasing audio device\n", cfg.idle_timeout_s);
+                audio_sink.stop();
+                player_listener.device_open = false;
+            }
+        }
 
         if (!client.is_connected()) {
             auto now = clock::now();
