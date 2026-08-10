@@ -23,7 +23,7 @@
 using namespace sendspin;
 
 static constexpr const char* DEFAULT_CONFIG_PATH = "/etc/sendspin-armv6.conf";
-static constexpr const char* VERSION = "0.1.7";
+static constexpr const char* VERSION = "0.1.8";
 
 static std::atomic<bool> running{true};
 
