@@ -10,7 +10,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG" CACHE STRING "" FORCE)
 
 set(SENDSPIN_ENABLE_PLAYER     ON  CACHE BOOL "" FORCE)
 set(SENDSPIN_ENABLE_CONTROLLER OFF CACHE BOOL "" FORCE)
-set(SENDSPIN_ENABLE_METADATA   OFF CACHE BOOL "" FORCE)
+set(SENDSPIN_ENABLE_METADATA   ON  CACHE BOOL "" FORCE)  # track info for the optional OLED display
 set(SENDSPIN_ENABLE_COLOR      OFF CACHE BOOL "" FORCE)
 set(SENDSPIN_ENABLE_ARTWORK    OFF CACHE BOOL "" FORCE)
 set(SENDSPIN_ENABLE_VISUALIZER OFF CACHE BOOL "" FORCE)
@@ -28,6 +28,10 @@ add_executable(sendspin-armv6
     src/main.cpp
     src/alsa_pipe_sink.cpp
     src/config.cpp
+    src/display_layout.cpp
+    src/framebuffer.cpp
+    src/oled_display.cpp
+    src/ssd1306.cpp
 )
 
 target_link_libraries(sendspin-armv6 PRIVATE sendspin asound pthread)
