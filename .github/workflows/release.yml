@@ -29,10 +29,11 @@ jobs:
           name: sendspin-armv6-linux-armv6-debug
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Automatically extracts tag name from ref
           tag_name: ${{ github.ref_name }}
           files: |
             sendspin-armv6-linux-armv6-release.tar.gz
             sendspin-armv6-linux-armv6-debug.tar.gz
+          generate_release_notes: true
