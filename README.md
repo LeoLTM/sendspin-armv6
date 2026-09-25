@@ -2,7 +2,7 @@
 
 Headless [Sendspin](https://github.com/Sendspin/sendspin-cpp) audio client for ARMv6 devices like the **Raspberry Pi Zero W**.
 
-Plays music through available ALSA devices. No display, no controls, just audio output as a systemd daemon.
+Plays music through available ALSA devices. No controls, just audio output as a systemd daemon, with an optional small OLED screen showing what's playing.
 
 ## How it works
 
@@ -114,6 +114,57 @@ defaults.ctl.card 1
 
 With this in place the `device` config key can be left unset.
 
+## OLED display (optional)
+
+A cheap 128x64 (or 128x32) I2C OLED can show the current track: title, artist, album, the stream format (e.g. `FLAC 44.1kHz 16-bit`), a progress bar with elapsed/total time, play/pause state and volume. Long titles scroll. The stream format line is shown on 128x64 panels only. The display is **disabled by default**, so without one the player runs headless and doesn't request track metadata from the server at all.
+
+Supported panels: **SSD1306** (most 0.96" modules) and **SH1106** (most 1.3" modules). Any 4-pin I2C module (`VCC GND SCL SDA`) works.
+
+### Wiring (Pi Zero W)
+
+| OLED pin | Pi header pin |
+|---|---|
+| VCC | Pin 1 (3.3V) |
+| GND | Pin 6 (GND) |
+| SDA | Pin 3 (GPIO 2 / SDA) |
+| SCL | Pin 5 (GPIO 3 / SCL) |
+
+### Enable I2C
+
+```bash
+sudo raspi-config nonint do_i2c 0   # or: raspi-config → Interface Options → I2C
+```
+
+Optionally speed up the bus for smoother scrolling by adding this line to `/boot/firmware/config.txt` (`/boot/config.txt` on older releases), then reboot:
+
+```ini
+dtparam=i2c_arm_baudrate=400000
+```
+
+Check that the display is detected (it usually shows up as `3c`):
+
+```bash
+sudo apt install i2c-tools
+i2cdetect -y 1
+```
+
+### Configure
+
+Add to `/etc/sendspin-armv6.conf` and restart the service:
+
+```ini
+display = ssd1306          # or sh1106 for 1.3" panels; none to disable
+display_i2c_address = 3c   # as shown by i2cdetect
+#display_height = 32       # for 128x32 panels
+#display_rotate = 180      # if mounted upside down
+```
+
+The panel switches off after `display_sleep` seconds (default 300) without playback to prevent OLED burn-in, and wakes up when music starts.
+
+Drawing runs in a lowest-priority background thread and only sends changed parts of the screen, so it doesn't interfere with audio playback. If the display is missing or stops responding, the error is logged and the display is retried every 10 seconds while playback continues normally.
+
+To turn the display off again, set `display = none` (or remove the line) and restart the service.
+
 ## Configuration reference
 
 | Key | Required | Default | Description |
@@ -124,6 +175,13 @@ With this in place the `device` config key can be left unset.
 | `device` | no | Default system audio device (`aplay -L`) | ALSA device string for audio output (e.g. `plughw:1,0`) |
 | `initial_volume` | no | Server-controlled | Initial hardware volume at startup (0–100) |
 | `idle_timeout` | no | `0` (disabled) | Idle timeout in seconds before releasing the audio device |
+| `display` | no | `none` | OLED display: `none`, `ssd1306` or `sh1106` |
+| `display_i2c_bus` | no | `1` | I2C bus number (`/dev/i2c-N`) |
+| `display_i2c_address` | no | `3c` | I2C address in hex, as shown by `i2cdetect` |
+| `display_height` | no | `64` | Panel height: `64` or `32` |
+| `display_rotate` | no | `0` | `0` or `180` degrees |
+| `display_contrast` | no | `128` | Brightness (0–255) |
+| `display_sleep` | no | `300` | Seconds without playback before the panel turns off (`0` = never) |
 
 ## Upgrading
 
@@ -187,6 +245,8 @@ Common causes:
 - USB soundcard not connected or `aplay` not available — plug in the soundcard and check `aplay -l`
 - Network not ready — check that the Pi can reach the server IP before the service starts
 - Wrong `server_url` in the config — verify with `curl http://<ip>:8927/`
+
+**Display stays blank** — check `journalctl -u sendspin-armv6` for `Display:` messages. Make sure I2C is enabled and the address in `i2cdetect -y 1` matches `display_i2c_address`. A 1.3" panel that shows noise or is shifted by two pixels needs `display = sh1106`.
 
 **No audio / aplay errors** — run `aplay -l` to find the correct device name and set it with `device = plughw:X,Y` in the config.
 

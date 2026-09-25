@@ -13,6 +13,26 @@ static std::string trim(const std::string& s) {
     return s.substr(start, end - start + 1);
 }
 
+/// Parse an integer key into out if it is within [min, max].  With base 16 an
+/// optional 0x prefix is accepted.  Prints a warning and leaves out untouched on error.
+static void parse_int_key(const std::string& path, int line_num, const std::string& key,
+                          const std::string& value, int min, int max, int& out, int base = 10) {
+    try {
+        size_t used = 0;
+        int v = std::stoi(value, &used, base);
+        if (used != value.size()) throw std::invalid_argument(value);
+        if (v < min || v > max) {
+            fprintf(stderr, "%s:%d: %s must be %d-%d, ignoring\n", path.c_str(), line_num,
+                    key.c_str(), min, max);
+            return;
+        }
+        out = v;
+    } catch (const std::exception&) {
+        fprintf(stderr, "%s:%d: invalid %s value '%s', ignoring\n", path.c_str(), line_num,
+                key.c_str(), value.c_str());
+    }
+}
+
 bool load_config(const std::string& path, Config& config) {
     std::ifstream file(path);
     if (!file.is_open()) {
@@ -83,6 +103,40 @@ bool load_config(const std::string& path, Config& config) {
                 fprintf(stderr, "%s:%d: invalid idle_timeout value '%s', ignoring\n",
                         path.c_str(), line_num, value.c_str());
             }
+        } else if (key == "display") {
+            if (value == "none" || value == "ssd1306" || value == "sh1106") {
+                config.display = value;
+            } else {
+                fprintf(stderr, "%s:%d: display must be none, ssd1306 or sh1106, ignoring\n",
+                        path.c_str(), line_num);
+            }
+        } else if (key == "display_i2c_bus") {
+            parse_int_key(path, line_num, key, value, 0, 255, config.display_i2c_bus);
+        } else if (key == "display_i2c_address") {
+            // Always hex, as printed by i2cdetect: "3c" and "0x3C" both work.
+            parse_int_key(path, line_num, key, value, 0x03, 0x77, config.display_i2c_address, 16);
+        } else if (key == "display_height") {
+            int v = -1;
+            parse_int_key(path, line_num, key, value, 32, 64, v);
+            if (v == 32 || v == 64) {
+                config.display_height = v;
+            } else if (v != -1) {
+                fprintf(stderr, "%s:%d: display_height must be 32 or 64, ignoring\n",
+                        path.c_str(), line_num);
+            }
+        } else if (key == "display_rotate") {
+            int v = -1;
+            parse_int_key(path, line_num, key, value, 0, 180, v);
+            if (v == 0 || v == 180) {
+                config.display_rotate = v;
+            } else if (v != -1) {
+                fprintf(stderr, "%s:%d: display_rotate must be 0 or 180, ignoring\n",
+                        path.c_str(), line_num);
+            }
+        } else if (key == "display_contrast") {
+            parse_int_key(path, line_num, key, value, 0, 255, config.display_contrast);
+        } else if (key == "display_sleep") {
+            parse_int_key(path, line_num, key, value, 0, 86400, config.display_sleep_s);
         } else {
             fprintf(stderr, "%s:%d: unknown key '%s'\n", path.c_str(), line_num,
                     key.c_str());
