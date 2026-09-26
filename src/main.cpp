@@ -199,6 +199,10 @@ int main(int argc, char* argv[]) {
     if (!cfg.device.empty()) {
         audio_sink.set_device(cfg.device);
     }
+    if (!cfg.mixer.empty()) {
+        audio_sink.set_mixer(cfg.mixer);
+        audio_sink.set_player(&player);
+    }
 
     // --- Listener implementations ---
 

@@ -1,6 +1,8 @@
 #include "alsa_pipe_sink.h"
 
+#include "sendspin/player_role.h"
 #include <alsa/asoundlib.h>
+#include <poll.h>
 #include <pthread.h>
 #include <sched.h>
 
@@ -31,6 +33,13 @@ void AlsaPipeSink::set_device(const std::string& device) {
     }
     device_ = device;
 }
+
+void AlsaPipeSink::set_mixer(const std::string& mixer) {
+    mixer_name_ = mixer;
+    use_hw_volume_ = !mixer.empty();
+}
+
+void AlsaPipeSink::set_player(sendspin::PlayerRole* player) { player_ = player; }
 
 // ---------------------------------------------------------------------------
 // ALSA lifecycle
@@ -120,6 +129,204 @@ void AlsaPipeSink::close_alsa() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ALSA mixer (hardware volume control)
+// ---------------------------------------------------------------------------
+
+bool AlsaPipeSink::open_mixer() {
+    if (mixer_name_.empty()) return true;
+
+    snd_mixer_t* handle = nullptr;
+    if (snd_mixer_open(&handle, 0) < 0) {
+        fprintf(stderr, "AlsaPipeSink: snd_mixer_open failed\n");
+        return false;
+    }
+
+    const char* dev = device_.empty() ? "default" : device_.c_str();
+    if (snd_mixer_attach(handle, dev) < 0) {
+        fprintf(stderr, "AlsaPipeSink: cannot attach mixer to '%s': %s\n",
+                dev, snd_strerror(errno));
+        snd_mixer_close(handle);
+        return false;
+    }
+    snd_mixer_selem_register(handle, nullptr, nullptr);
+    if (snd_mixer_load(handle) < 0) {
+        fprintf(stderr, "AlsaPipeSink: cannot load mixer: %s\n",
+                snd_strerror(errno));
+        snd_mixer_close(handle);
+        return false;
+    }
+
+    // Find elements whose name contains the requested substring (case-insensitive).
+    snd_mixer_selem_id_t* sid;
+    snd_mixer_selem_id_alloca(&sid);
+    for (snd_mixer_elem_t* elem = snd_mixer_first_elem(handle);
+         elem; elem = snd_mixer_elem_next(elem)) {
+        if (!snd_mixer_selem_is_active(elem)) continue;
+        if (!snd_mixer_selem_has_playback_volume(elem)) continue;
+        snd_mixer_selem_get_id(elem, sid);
+        std::string name(snd_mixer_selem_id_get_name(sid));
+        std::string needle = mixer_name_;
+        auto tolower = [](unsigned char c) { return std::tolower(c); };
+        std::transform(name.begin(), name.end(), name.begin(), tolower);
+        std::transform(needle.begin(), needle.end(), needle.begin(), tolower);
+        if (name.find(needle) != std::string::npos) {
+            mixer_elems_.push_back(elem);
+        }
+    }
+
+    if (mixer_elems_.empty()) {
+        fprintf(stderr,
+                "AlsaPipeSink: no playback volume element matching '%s' on '%s'\n",
+                mixer_name_.c_str(), dev);
+        snd_mixer_close(handle);
+        return false;
+    }
+
+    fprintf(stderr, "AlsaPipeSink: hardware volume via '%s' (%zu element(s))\n",
+            mixer_name_.c_str(), mixer_elems_.size());
+    mixer_ = handle;
+
+    // Open the ALSA control device for this same device so we can subscribe
+    // to mixer change events.  SND_CTL_READONLY because we never write to it.
+    snd_ctl_t* ctl = nullptr;
+    const char* ctl_dev = device_.empty() ? "default" : device_.c_str();
+    int err = snd_ctl_open(&ctl, ctl_dev, SND_CTL_READONLY);
+    if (err < 0) {
+        fprintf(stderr, "AlsaPipeSink: snd_ctl_open failed: %s\n", snd_strerror(err));
+        // Non-fatal: mixer still works, just no event listener.
+        return true;
+    }
+    err = snd_ctl_subscribe_events(ctl, 1);
+    if (err < 0) {
+        fprintf(stderr, "AlsaPipeSink: snd_ctl_subscribe_events failed: %s\n", snd_strerror(err));
+        snd_ctl_close(ctl);
+        return true;
+    }
+
+    struct pollfd pfd{};
+    err = snd_ctl_poll_descriptors(ctl, &pfd, 1);
+    if (err < 0 || pfd.fd < 0) {
+        fprintf(stderr, "AlsaPipeSink: snd_ctl_poll_descriptors failed: %s\n", snd_strerror(err));
+        snd_ctl_close(ctl);
+        return true;
+    }
+    ctl_fd_ = pfd.fd;
+    ctl_ = ctl;
+    fprintf(stderr, "AlsaPipeSink: mixer event listener on fd %d\n", ctl_fd_);
+    return true;
+}
+
+void AlsaPipeSink::close_mixer() {
+    if (mixer_) {
+        snd_mixer_close(static_cast<snd_mixer_t*>(mixer_));
+        mixer_ = nullptr;
+    }
+    mixer_elems_.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Hardware volume event listener (local → server)
+//
+// Uses the ALSA control API (snd_ctl_*) to get a file descriptor that the
+// kernel wakes on mixer events.  The thread calls poll() on that fd and
+// blocks indefinitely — 0% CPU when idle.  On wake, it reads the current
+// volume + mute state and notifies the sendspin player.
+// ---------------------------------------------------------------------------
+
+void AlsaPipeSink::start_event_loop() {
+    if (!use_hw_volume_ || !player_ || event_running_.load()) return;
+    if (pipe(wake_fd_) < 0) {
+        fprintf(stderr, "AlsaPipeSink: pipe failed: %s\n", strerror(errno));
+        return;
+    }
+    event_running_.store(true);
+    event_thread_ = std::thread([this] { event_loop(); });
+}
+
+void AlsaPipeSink::stop_event_loop() {
+    if (!event_running_.exchange(false)) return;
+    // Wake the poll() by writing to the wake pipe.
+    if (wake_fd_[1] >= 0) {
+        char c = 0;
+        ::write(wake_fd_[1], &c, 1);
+    }
+    if (event_thread_.joinable()) event_thread_.join();
+    if (wake_fd_[0] >= 0) { close(wake_fd_[0]); wake_fd_[0] = -1; }
+    if (wake_fd_[1] >= 0) { close(wake_fd_[1]); wake_fd_[1] = -1; }
+    if (ctl_) {
+        snd_ctl_close(static_cast<snd_ctl_t*>(ctl_));
+        ctl_ = nullptr;
+        ctl_fd_ = -1;
+    }
+}
+
+static uint8_t read_hw_volume(snd_mixer_elem_t* elem) {
+    long min = 0, max = 0;
+    snd_mixer_selem_get_playback_volume_range(elem, &min, &max);
+    long raw = 0;
+    snd_mixer_selem_get_playback_volume(elem, SND_MIXER_SCHN_FRONT_LEFT, &raw);
+    if (max <= min) return 100;
+    auto vol = static_cast<uint8_t>((raw - min) * 100 / (max - min) + 0.5);
+    return vol > 100 ? 100 : vol;
+}
+
+static bool read_hw_mute(snd_mixer_elem_t* elem) {
+    int on = 0;
+    snd_mixer_selem_get_playback_switch(elem, SND_MIXER_SCHN_FRONT_LEFT, &on);
+    return on == 0;
+}
+
+void AlsaPipeSink::event_loop() {
+    // Drain any pending mixer events so we start from a clean state.
+    if (mixer_) snd_mixer_handle_events(static_cast<snd_mixer_t*>(mixer_));
+
+    uint8_t last_vol = mixer_elems_.empty() ? 100
+                       : read_hw_volume(static_cast<snd_mixer_elem_t*>(mixer_elems_[0]));
+    bool last_mute = mixer_elems_.empty() ? false
+                      : read_hw_mute(static_cast<snd_mixer_elem_t*>(mixer_elems_[0]));
+
+    struct pollfd pfds[2]{};
+    pfds[0].fd = ctl_fd_;
+    pfds[0].events = POLLIN;
+    pfds[1].fd = wake_fd_[0];
+    pfds[1].events = POLLIN;
+
+    while (event_running_.load() && ctl_fd_ >= 0) {
+        int ret = poll(pfds, 2, -1);
+        if (ret < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (!event_running_.load()) break;
+        if (pfds[1].revents & POLLIN) break;  // wake pipe → shutdown
+
+        // ALSA signaled a control event.  Consume it.
+        if (ctl_) snd_ctl_read(static_cast<snd_ctl_t*>(ctl_), nullptr);
+
+        // Drain pending mixer events (handles the case where the control
+        // event was a mixer element change).
+        if (mixer_) snd_mixer_handle_events(static_cast<snd_mixer_t*>(mixer_));
+
+        if (mixer_elems_.empty()) continue;
+
+        auto* elem = static_cast<snd_mixer_elem_t*>(mixer_elems_[0]);
+        uint8_t vol = read_hw_volume(elem);
+        bool mute = read_hw_mute(elem);
+
+        if (vol != last_vol) {
+            last_vol = vol;
+            player_->update_volume(vol);
+            fprintf(stderr, ">>> Local volume change: %u\n", vol);
+        }
+        if (mute != last_mute) {
+            last_mute = mute;
+            player_->update_muted(mute);
+            fprintf(stderr, ">>> Local mute change: %s\n", mute ? "on" : "off");
+        }
+    }
+}
+
 bool AlsaPipeSink::recover_xrun(int err) {
     if (err == -EPIPE) {
         fprintf(stderr, "AlsaPipeSink: underrun, recovering\n");
@@ -154,8 +361,14 @@ bool AlsaPipeSink::configure(uint32_t sample_rate, uint8_t channels,
 
     if (!open_alsa()) return false;
 
+    if (use_hw_volume_ && !open_mixer()) {
+        close_alsa();
+        return false;
+    }
+
     running_.store(true);
     playback_thread_ = std::thread([this] { playback_loop(); });
+    start_event_loop();
     return true;
 }
 
@@ -167,6 +380,8 @@ void AlsaPipeSink::stop() {
         ring_cv_.notify_all();
         if (playback_thread_.joinable()) playback_thread_.join();
     }
+    stop_event_loop();
+    close_mixer();
     close_alsa();
     {
         std::lock_guard<std::mutex> lk(ring_mtx_);
@@ -189,9 +404,27 @@ void AlsaPipeSink::clear() {
 
 void AlsaPipeSink::set_volume(uint8_t volume) {
     volume_.store(volume > 100 ? 100 : volume);
+    if (!use_hw_volume_ || !mixer_) return;
+
+    long min = 0, max = 0;
+    for (void* e : mixer_elems_) {
+        snd_mixer_selem_get_playback_volume_range(static_cast<snd_mixer_elem_t*>(e),
+                                                 &min, &max);
+        if (max <= min) continue;
+        long val = min + static_cast<long>(volume) * (max - min) / 100;
+        snd_mixer_selem_set_playback_volume_all(
+            static_cast<snd_mixer_elem_t*>(e), val);
+    }
 }
 
-void AlsaPipeSink::set_muted(bool muted) { muted_.store(muted); }
+void AlsaPipeSink::set_muted(bool muted) {
+    muted_.store(muted);
+    if (!use_hw_volume_ || !mixer_) return;
+    for (void* e : mixer_elems_) {
+        snd_mixer_selem_set_playback_switch_all(
+            static_cast<snd_mixer_elem_t*>(e), muted ? 0 : 1);
+    }
+}
 
 void AlsaPipeSink::apply_volume(uint8_t* data, size_t length) {
     const uint8_t vol = volume_.load();
@@ -346,7 +579,8 @@ void AlsaPipeSink::playback_loop() {
         ring_cv_.notify_one();  // wake producer if it was blocked
 
         // ---- Apply volume (done here so changes take effect immediately) ----
-        apply_volume(buf.data(), to_read);
+        if (!use_hw_volume_)
+            apply_volume(buf.data(), to_read);
 
         // ---- Write to ALSA (blocking — provides natural pacing) ----
         snd_pcm_uframes_t frames =
